@@ -1,0 +1,60 @@
+# sample vit models list for RTX 50xx series GPUs (e.g., 5090, 5080, 5070, 5060, etc.)
+# ── Qwen-Image ──────────────
+- name: "SVDQ FP4 r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r32-qwen-image.safetensors"
+  edit: false
+- name: "SVDQ FP4 r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r128-qwen-image.safetensors"
+  edit: false
+- name: "Lightning 4-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r32-qwen-image-lightningv1.0-4steps.safetensors"
+  edit: false
+- name: "Lightning 4-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r128-qwen-image-lightningv1.0-4steps.safetensors"
+  edit: false
+- name: "Lightning 8-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r32-qwen-image-lightningv1.1-8steps.safetensors"
+  edit: false
+- name: "Lightning 8-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-fp4_r128-qwen-image-lightningv1.1-8steps.safetensors"
+  edit: false
+
+# ── Qwen-Image-Edit ──────────
+- name: "Edit FP4 r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r32-qwen-image-edit.safetensors"
+  edit: true
+- name: "Edit FP4 r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r128-qwen-image-edit.safetensors"
+  edit: true
+- name: "Edit Lightning 4-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r32-qwen-image-edit-lightningv1.0-4steps.safetensors"
+  edit: true
+- name: "Edit Lightning 4-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r128-qwen-image-edit-lightningv1.0-4steps.safetensors"
+  edit: true
+- name: "Edit Lightning 8-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r32-qwen-image-edit-lightningv1.0-8steps.safetensors"
+  edit: true
+- name: "Edit Lightning 8-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-fp4_r128-qwen-image-edit-lightningv1.0-8steps.safetensors"
+  edit: true
+
+# ── Qwen-Image-Edit 2509 ─────
+- name: "Edit2509 FP4 r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r32-qwen-image-edit-2509.safetensors"
+  edit: true
+- name: "Edit2509 FP4 r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r128-qwen-image-edit-2509.safetensors"
+  edit: true
+- name: "Edit2509 Lightning 4-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r32-qwen-image-edit-2509-lightningv2.0-4steps.safetensors"
+  edit: true
+- name: "Edit2509 Lightning 4-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r128-qwen-image-edit-2509-lightningv2.0-4steps.safetensors"
+  edit: true
+- name: "Edit2509 Lightning 8-step r32"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r32-qwen-image-edit-2509-lightningv2.0-8steps.safetensors"
+  edit: true
+- name: "Edit2509 Lightning 8-step r128"
+  path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-fp4_r128-qwen-image-edit-2509-lightningv2.0-8steps.safetensors"
+  edit: true

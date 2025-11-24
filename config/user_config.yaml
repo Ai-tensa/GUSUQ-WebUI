@@ -1,0 +1,50 @@
+# Output directory configuration (example: outputs/{mode}/{date}/ if both are true)
+output_dir: outputs
+save_subdir_by_mode: true
+save_subdir_by_date: true
+
+# Default common generation parameters (t2i, i2i, inpainting, etc.)
+
+## Gallery configuration
+gallery_columns: 4 # number of columns in output image gallery
+
+## Image size defaults
+default_width: 1328 # 1328 is the default size for Qwen-Image models. 1024 for Qwen-Image-Edit models.
+default_width_min: 512
+default_width_max: 4096
+default_width_step: 64
+default_height: 1328 # 1328 is the default size for Qwen-Image models. 1024 for Qwen-Image-Edit models.
+default_height_min: 512
+default_height_max: 4096
+default_height_step: 64
+
+## Batch size/count defaults
+default_batch_size: 8 # max 8 for Nunchaku Qwen models
+default_batch_size_min: 1
+default_batch_size_max: 8
+default_batch_size_step: 1
+default_batch_count: 1
+default_batch_count_min: 1
+default_batch_count_max: 100
+default_batch_count_step: 1
+
+## Other generation parameters
+default_cfg: 1.0
+default_cfg_min: 0.0
+default_cfg_max: 20.0
+default_cfg_step: 0.1
+default_steps: 4
+default_steps_min: 1
+default_steps_max: 100
+default_steps_step: 1
+
+
+# Default common generation parameters (i2i and inpainting)
+default_denoising_strength: 1.0 # strength of denoising for i2i and inpainting
+default_denoising_strength_min: 0.0
+default_denoising_strength_max: 1.0
+default_denoising_strength_step: 0.01
+default_consistency_strength: 0.0 # strength of consistency for i2i and inpainting (ref.: https://x.com/gcem156/status/1986772204210856168, https://gist.github.com/laksjdjf/7ed7174eaf125918e7a5848a694500be)
+default_consistency_strength_min: -1.0
+default_consistency_strength_max: 1.0
+default_consistency_strength_step: 0.01
