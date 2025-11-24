@@ -1,0 +1,3 @@
+{
+    "opt_policy": "low_vram" # high_vram | mid_vram | low_vram
+}
