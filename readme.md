@@ -22,7 +22,9 @@
     .\{venv_name}\Scripts\activate # Activate the virtual environment (Windows)
     ```
 3. Install the required dependencies:
-    1. Install pytorch and nunchaku according to your CUDA version and Python version from [pytorch.org](https://pytorch.org/get-started/locally/) and [nunchaku releases](https://github.com/nunchaku-tech/nunchaku). I tested pytorch 2.8.0 and nunchaku 1.0.2, but you can try other versions as well. 
+    1. Install pytorch and nunchaku according to your CUDA version and Python version from [pytorch.org](https://pytorch.org/get-started/locally/) and [nunchaku releases](https://github.com/nunchaku-tech/nunchaku).
+    Since these packages depend on your system configuration deeply, please check and select the appropriate versions in their official websites.
+    I tested pytorch 2.8.0 and nunchaku 1.0.2, but you can try other versions as well. 
 
         Note:
         If you use Linux/WSL, python 3.12 and CUDA 12.8, you can use `requirements.txt` with just uncomment (skip this step).
@@ -36,6 +38,7 @@
         pip install https://github.com/nunchaku-tech/nunchaku/releases/download/v1.0.2/nunchaku-1.0.2+torch2.8-cp313-cp313-linux_x86_64.whl
         ```
     2. Install other dependencies
+        (if you skipped step 3-1, uncomment the following line to install torch and nunchaku as well)
         ```bash
         pip install -r requirements.txt
         ```
