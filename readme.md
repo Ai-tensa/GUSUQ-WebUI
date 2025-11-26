@@ -2,21 +2,30 @@
 
 ## Installation
 
-1. Clone this repository:
+1. Install system dependencies:
+    - Install git, CUDA
+    - Install python and build tools
+        - Linux (Ubuntu) / WSL:
+            ```bash
+            sudo apt update
+            sudo apt install build-essential python3-dev # python 3.12 for Ubuntu 24.04
+            # sudo apt install build-essential python3.13 python3.13-venv python3.13-dev # other python versions (example: python 3.13). Deadsnakes PPA may be needed.
+            ```
+
+2. Clone this repository:
 
     ```bash
     git clone https://github.com/Ai-tensa/GUSUQ-WebUI.git
     cd GUSUQ-WebUI
-    python -m venv {venv_name} # Create a virtual environment (optional. other methods like conda are also fine)
+    python3 -m venv {venv_name} # Create a virtual environment (optional. other methods like conda are also fine)
     source {venv_name}/bin/activate # Activate the virtual environment (Linux/Mac)
     .\{venv_name}\Scripts\activate # Activate the virtual environment (Windows)
     ```
-2. Install the required dependencies:
-
+3. Install the required dependencies:
     1. Install pytorch and nunchaku according to your CUDA version and Python version from [pytorch.org](https://pytorch.org/get-started/locally/) and [nunchaku releases](https://github.com/nunchaku-tech/nunchaku). I tested pytorch 2.8.0 and nunchaku 1.0.2, but you can try other versions as well. 
 
         Note:
-        If you use Linux, python 3.12 and CUDA 12.8, you can use `requirements.txt` with just uncomment (skip this step).
+        If you use Linux/WSL, python 3.12 and CUDA 12.8, you can use `requirements.txt` with just uncomment (skip this step).
 
         Example for CUDA 12.6 and Python 3.13:
         ```bash
@@ -42,10 +51,10 @@
         ```
     5. Launch the web UI:
         ```bash
-        python webui.py (--user-config-yaml path/to/your_config.yaml ...)
+        python webui.py (--user-config-yaml path/to/your_config.yaml ...) # RTX 40xx orl older GPUs
+        # python webui.py  --vit-models-yaml config/vit_models_sample_50xx.yaml (--user-config-yaml path/to/your_config.yaml ...) # for RTX 50xx (Blackwell) GPUs
         (python webui.py --help for more options)
         ```
-
 
 
 ## Offloading Option
