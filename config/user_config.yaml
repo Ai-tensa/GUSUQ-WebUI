@@ -19,7 +19,7 @@ default_height_max: 4096
 default_height_step: 64
 
 ## Batch size/count defaults
-default_batch_size: 8 # max 8 for Nunchaku Qwen models
+default_batch_size: 1 # max 8 for Nunchaku Qwen models
 default_batch_size_min: 1
 default_batch_size_max: 8
 default_batch_size_step: 1
