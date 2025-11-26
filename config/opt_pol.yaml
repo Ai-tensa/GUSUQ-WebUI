@@ -1,3 +1,14 @@
 {
-    "opt_policy": "low_vram" # high_vram | mid_vram | low_vram
+    # General optimization policy for memory management and speed.
+    "opt_policy": "low_vram", # high_vram | mid_vram | low_vram
+
+    # VAE setting (See AutoencoderKLQwenImage documentation of diffusers for details)
+
+    "enable_vae_slicing": true,
+    "enable_vae_tiling": false,
+    # "vae_tile_sample_min_height": 256, # uncomment to set custom tile height for VAE tiling
+    # "vae_tile_sample_min_width": 256,   # uncomment to set custom tile width for VAE tiling
+    # "vae_tile_sample_stride_height": 192, # uncomment to set custom tile stride height for VAE tiling
+    # "vae_tile_sample_stride_width": 192,   # uncomment to set custom tile stride width for VAE tiling
+
 }

@@ -124,7 +124,10 @@ class PipelineManager():
             opt_policy = self.opt_pol_cfg.get("opt_policy", None)
             for _pipe in self.pipes.values():
                 patch_encode_prompt(_pipe, opt_policy)
-            self.vae.enable_slicing()
+            if self.opt_pol_cfg.get("enable_vae_slicing", True):
+                self.vae.enable_slicing()
+            if self.opt_pol_cfg.get("enable_vae_tiling", False):
+                self.vae.enable_tiling()
 
             if opt_policy == "high_vram":
                 self.transformer.to("cuda")
