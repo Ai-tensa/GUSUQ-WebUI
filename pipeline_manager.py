@@ -178,7 +178,7 @@ class PipelineManager():
         if self.text_encoder is None or self.tokenizer is None or self.vision_processor is None:
             self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 TEXT_ENCODER_ID,
-                torch_dtype=torch.float16,
+                torch_dtype=torch.float16 if "AWQ" in TEXT_ENCODER_ID else torch.bfloat16,
                 trust_remote_code=True,
                 low_cpu_mem_usage=True,
             )
