@@ -127,7 +127,12 @@ class PipelineManager():
             if self.opt_pol_cfg.get("enable_vae_slicing", True):
                 self.vae.enable_slicing()
             if self.opt_pol_cfg.get("enable_vae_tiling", False):
-                self.vae.enable_tiling()
+                self.vae.enable_tiling(
+                    tile_sample_min_height=self.opt_pol_cfg.get("vae_tile_sample_min_height", None),
+                    tile_sample_min_width=self.opt_pol_cfg.get("vae_tile_sample_min_width", None),
+                    tile_sample_stride_height=self.opt_pol_cfg.get("vae_tile_sample_stride_height", None),
+                    tile_sample_stride_width=self.opt_pol_cfg.get("vae_tile_sample_stride_width", None),
+                )
 
             if opt_policy == "high_vram":
                 self.transformer.to("cuda")
