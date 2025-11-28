@@ -22,6 +22,7 @@ from metadata import (
     apply_config_to_inpaint,
     extract_meta,
     show_meta,
+    sync_meta,
 )
 from utils import release_memory_resources, rss_mb, round32
 
@@ -606,6 +607,7 @@ with gr.Blocks(
                 meta_state_t2i = gr.State([])
                 meta_view_t2i = gr.JSON(label="Metadata", show_label=False)
                 sel_t2i_path = gr.State("")
+                sel_idx_t2i = gr.State(0)
 
         gen_btn_t2i.click(
             generate_t2i,
@@ -634,7 +636,12 @@ with gr.Blocks(
         )
         reuse_seed_btn_t2i.click(_extract_seed, meta_view_t2i, seed_box_t2i)
         gallery_t2i.select(
-            show_meta, inputs=meta_state_t2i, outputs=[meta_view_t2i, sel_t2i_path]
+            show_meta, inputs=meta_state_t2i, outputs=[meta_view_t2i, sel_t2i_path, sel_idx_t2i]
+        )
+        gallery_t2i.change(
+            sync_meta,
+            inputs=[gallery_t2i, meta_state_t2i, sel_idx_t2i],
+            outputs=[meta_view_t2i, sel_idx_t2i],
         )
 
     with gr.Tab("i2i"):
@@ -804,6 +811,7 @@ with gr.Blocks(
                 meta_state_i2i = gr.State([])
                 meta_view_i2i = gr.JSON(label="Metadata", show_label=False)
                 sel_i2i_path = gr.State("")
+                sel_idx_i2i = gr.State(0)
 
         gen_i2i_btn.click(
             generate_i2i,
@@ -840,7 +848,12 @@ with gr.Blocks(
         )
         reuse_seed_i2i_btn.click(_extract_seed, meta_view_i2i, seed_i2i)
         gallery_i2i.select(
-            show_meta, inputs=meta_state_i2i, outputs=[meta_view_i2i, sel_i2i_path]
+            show_meta, inputs=meta_state_i2i, outputs=[meta_view_i2i, sel_i2i_path, sel_idx_i2i]
+        )
+        gallery_i2i.change(
+            sync_meta,
+            inputs=[gallery_i2i, meta_state_i2i, sel_idx_i2i],
+            outputs=[meta_view_i2i, sel_idx_i2i],
         )
 
     with gr.Tab("inpaint"):
@@ -1016,6 +1029,7 @@ with gr.Blocks(
                 meta_state_inp = gr.State([])
                 meta_view_inp = gr.JSON(label="Metadata", show_label=False)
                 sel_inp_path = gr.State("")
+                sel_idx_inp = gr.State(0)
 
         gen_inp_btn.click(
             generate_inpaint,
@@ -1052,7 +1066,12 @@ with gr.Blocks(
         )
         reuse_seed_inp_btn.click(_extract_seed, meta_view_inp, seed_inp)
     gallery_inp.select(
-        show_meta, inputs=meta_state_inp, outputs=[meta_view_inp, sel_inp_path]
+        show_meta, inputs=meta_state_inp, outputs=[meta_view_inp, sel_inp_path, sel_idx_inp]
+    )
+    gallery_inp.change(
+        sync_meta,
+        inputs=[gallery_inp, meta_state_inp, sel_idx_inp],
+        outputs=[meta_view_inp, sel_idx_inp],
     )
 
     with gr.Tab("vlm"):

@@ -6,9 +6,13 @@ from pathlib import Path
 
 
 def show_meta(evt: gr.SelectData, metas):
-    return metas[evt.index] if 0 <= evt.index < len(metas) else {}, evt.value["image"][
-        "path"
-    ]
+    return metas[evt.index], evt.value["image"]["path"], evt.index
+
+def sync_meta(gallery_val, metas, idx):
+    if not metas:
+        return gr.update(), gr.update(), 0
+    idx = min(idx, len(metas) - 1)
+    return metas[idx], idx
 
 
 _dest_options = ["input", "ref1", "ref2", "ref3"]
