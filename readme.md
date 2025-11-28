@@ -42,11 +42,22 @@
         ```bash
         pip install -r requirements.txt
         ```
-    3. AutoAWQ installation (Linux only?):
-        ```bash
-        pip install autoawq==0.2.9
-        ```
-        Windows installation guide: [AutoAWQ Windows Installation Guide](https://github.com/casper-hansen/AutoAWQ/issues/704) (but I haven't tested it yet)
+    3. AutoAWQ installation (bit challenging for Windows users?):
+
+        Note: Windows installation guide: [AutoAWQ Windows Installation Guide](https://github.com/casper-hansen/AutoAWQ/issues/704) (but I haven't tested it yet)
+        1. Linux
+            ```bash
+            pip install autoawq==0.2.9
+            ```
+        2. Windows (non WSL)
+            ```bash
+            pip install git+https://github.com/casper-hansen/AutoAWQ.git --no-deps
+            pip install datasets
+            pip install triton-windows
+            pip install zstandard
+            ```
+        3. WSL
+            Not tested yet. Please try Windows installation steps above or refer to the above installation guide.
     4. Desable AutoAWQ of Qwen-VL-7B-Instruct model in `constants.py` if you cannot install AutoAWQ:
         ```python
         # TEXT_ENCODER_ID = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ" # 7GB model with AutoAWQ)
