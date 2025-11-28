@@ -1,6 +1,6 @@
 {
     # General optimization policy for memory management and speed.
-    "opt_policy": "low_vram", # high_vram | mid_vram | low_vram
+    "opt_policy": "low_vram", # no_offload | high_vram | mid_vram | low_vram
 
     # VAE setting (See AutoencoderKLQwenImage documentation of diffusers for details)
 

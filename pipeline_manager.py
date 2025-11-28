@@ -122,8 +122,9 @@ class PipelineManager():
                 DEFAULT_QWEN_IMAGE_EDIT_ID, **self.pipes["i2i_edit"].components)
             
             opt_policy = self.opt_pol_cfg.get("opt_policy", None)
-            for _pipe in self.pipes.values():
-                patch_encode_prompt(_pipe, opt_policy)
+            if not opt_policy == "no_offload":
+                for _pipe in self.pipes.values():
+                    patch_encode_prompt(_pipe, opt_policy)
             if self.opt_pol_cfg.get("enable_vae_slicing", True):
                 self.vae.enable_slicing()
             if self.opt_pol_cfg.get("enable_vae_tiling", False):
@@ -134,7 +135,10 @@ class PipelineManager():
                     tile_sample_stride_width=self.opt_pol_cfg.get("vae_tile_sample_stride_width", None),
                 )
 
-            if opt_policy == "high_vram":
+            if opt_policy == "no_offload":
+                self.pipes["i2i_edit"].to("cuda")
+                print("No offloading applied.")
+            elif opt_policy == "high_vram":
                 self.transformer.to("cuda")
                 self.vae.to("cuda")
                 for _pipe in self.pipes.values():
