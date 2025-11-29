@@ -418,7 +418,7 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
             noise = self._pack_latents(noise, batch_size, num_channels_latents, height, width)
             latents = self._pack_latents(latents, batch_size, num_channels_latents, height, width)
             first_image_latents = self._pack_latents(
-                first_image_latents, batch_size, num_channels_latents, height, width
+                first_image_latents, 1, num_channels_latents, height, width
             )
         else:
             latents = latents.to(device=device, dtype=dtype)
