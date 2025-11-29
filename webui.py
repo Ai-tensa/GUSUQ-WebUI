@@ -10,6 +10,7 @@ import json
 import yaml
 from functools import partial
 from PIL import Image, PngImagePlugin, ImageChops
+from time import perf_counter
 from pipeline_manager import PipelineManager
 from constants import (
     SAMPLERS,
@@ -135,6 +136,7 @@ def _extract_seed(meta):
 def generate_t2i(
     model, prompt, negative, cfg, steps, width, height, bsz, bcnt, sampler, seed
 ):
+    start_time = perf_counter()
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
 
@@ -191,7 +193,9 @@ def generate_t2i(
             images.append(str(fpath))
 
     release_memory_resources()
-    return images, meta_list
+    elapsed = perf_counter() - start_time
+    status = f"Generated {bsz * bcnt} images in {elapsed:.1f} seconds."
+    return images, meta_list, status
 
 
 def generate_i2i(
@@ -217,14 +221,17 @@ def generate_i2i(
     seed,
     consistency_strength,
 ):
+    start_time = perf_counter()
     is_edit_model = vit_model_table[model]["edit"]
-    
+
     # Validation and adjustments
     if is_edit_model:
         if strength != 1.0:
             gr.Info("Strength is not used for Edit models. Ignoring it.")
         if not resize_before_i2i and consistency_strength != 0.0:
-            gr.Info("For consistency strength, input image must be resized. Setting consistency strength to 0.0.")
+            gr.Info(
+                "For consistency strength, input image must be resized. Setting consistency strength to 0.0."
+            )
             consistency_strength = 0.0
     else:
         if not resize_before_i2i:
@@ -232,8 +239,10 @@ def generate_i2i(
             resize_before_i2i = True
             strength = 1.0
         if consistency_strength != 0.0:
-            gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
-    if resize_before_i2i and is_edit_model: # Normal i2i models resize in their pipe
+            gr.Info(
+                "Consistency strength is only supported for Edit models. Ignoring it."
+            )
+    if resize_before_i2i and is_edit_model:  # Normal i2i models resize in their pipe
         input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
 
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
@@ -328,7 +337,9 @@ def generate_i2i(
     )
 
     release_memory_resources()
-    return images, meta_list
+    elapsed = perf_counter() - start_time
+    status = f"Generated {bsz * bcnt} images in {elapsed:.1f} seconds."
+    return images, meta_list, status
 
 
 def generate_inpaint(
@@ -353,12 +364,13 @@ def generate_inpaint(
     seed,
     consistency_strength,
 ):
+    start_time = perf_counter()
     is_edit_model = vit_model_table[model]["edit"]
     if consistency_strength != 0.0 and not is_edit_model:
         gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
     input_image = editor_val["background"].convert("RGB")
     mask_image = _extract_mask(editor_val)
-    if is_edit_model: # Normal inpaint models resize in their pipe
+    if is_edit_model:  # Normal inpaint models resize in their pipe
         input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
         mask_image = mask_image.resize((width, height), Image.Resampling.LANCZOS)
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
@@ -456,7 +468,9 @@ def generate_inpaint(
     meta_list.append({})  # mask has no metadata
 
     release_memory_resources()
-    return images, meta_list
+    elapsed = perf_counter() - start_time
+    status = f"Generated {bsz * bcnt} images in {elapsed:.1f} seconds."
+    return images, meta_list, status
 
 
 def send_image(path, inpaint=False):
@@ -504,9 +518,8 @@ with gr.Blocks(
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_btn_t2i = gr.Button("Generate", variant="primary")
-                    progress_t2i = gr.HTML(
-                        "<div style='width:100%;height:72px;'></div>",
-                        elem_id="progress_t2i",
+                    progress_t2i = gr.Textbox(
+                        "", label="Status", interactive=False, lines=1
                     )
                 with gr.Tab("Replace"):
                     with gr.Group():
@@ -597,12 +610,8 @@ with gr.Blocks(
                             value=-1, label="Seed", precision=0, scale=3
                         )
                         with gr.Column():
-                            gr.Button("🎲").click(
-                                lambda: -1, None, seed_box_t2i
-                            )
-                            reuse_seed_btn_t2i = gr.Button(
-                                "♻"
-                            )
+                            gr.Button("🎲").click(lambda: -1, None, seed_box_t2i)
+                            reuse_seed_btn_t2i = gr.Button("♻")
 
             with gr.Column(scale=3):
                 gallery_t2i = gr.Gallery(
@@ -612,6 +621,7 @@ with gr.Blocks(
                     show_label=False,
                     columns=config.get("gallery_columns", 4),
                     preview=True,
+                    interactive=False,
                 )
                 with gr.Row():
                     send_t2i_i2i_btn = gr.Button("Send to i2i")
@@ -643,7 +653,7 @@ with gr.Blocks(
                 sampler,
                 seed_box_t2i,
             ],
-            outputs=[gallery_t2i, meta_state_t2i],
+            outputs=[gallery_t2i, meta_state_t2i, progress_t2i],
             show_progress_on=progress_t2i,
             concurrency_limit=1,
             concurrency_id="gpu",
@@ -655,7 +665,9 @@ with gr.Blocks(
         )
         reuse_seed_btn_t2i.click(_extract_seed, meta_view_t2i, seed_box_t2i)
         gallery_t2i.select(
-            show_meta, inputs=meta_state_t2i, outputs=[meta_view_t2i, sel_t2i_path, sel_idx_t2i]
+            show_meta,
+            inputs=meta_state_t2i,
+            outputs=[meta_view_t2i, sel_t2i_path, sel_idx_t2i],
         )
         gallery_t2i.change(
             sync_meta,
@@ -671,9 +683,8 @@ with gr.Blocks(
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_i2i_btn = gr.Button("Generate", variant="primary")
-                    progress_i2i = gr.HTML(
-                        "<div style='width:100%;height:72px;'></div>",
-                        elem_id="progress_i2i",
+                    progress_i2i = gr.Textbox(
+                        "", label="Status", interactive=False, lines=1
                     )
                 with gr.Tab("Replace"):
                     with gr.Group():
@@ -820,6 +831,7 @@ with gr.Blocks(
                     show_label=False,
                     columns=config.get("gallery_columns", 4),
                     preview=True,
+                    interactive=False,
                 )
                 with gr.Row():
                     send_i2i_i2i_btn = gr.Button("Send to i2i")
@@ -861,7 +873,7 @@ with gr.Blocks(
                 seed_i2i,
                 consistency_strength_i2i,
             ],
-            outputs=[gallery_i2i, meta_state_i2i],
+            outputs=[gallery_i2i, meta_state_i2i, progress_i2i],
             show_progress_on=progress_i2i,
             concurrency_id="gpu",
         )
@@ -875,7 +887,9 @@ with gr.Blocks(
             lambda resize: gr.update(visible=resize), resize_before_i2i, strengths_i2i
         )
         gallery_i2i.select(
-            show_meta, inputs=meta_state_i2i, outputs=[meta_view_i2i, sel_i2i_path, sel_idx_i2i]
+            show_meta,
+            inputs=meta_state_i2i,
+            outputs=[meta_view_i2i, sel_i2i_path, sel_idx_i2i],
         )
         gallery_i2i.change(
             sync_meta,
@@ -891,9 +905,8 @@ with gr.Blocks(
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_inp_btn = gr.Button("Generate", variant="primary")
-                    progress_inp = gr.HTML(
-                        "<div style='width:100%;height:72px;'></div>",
-                        elem_id="progress_inpaint",
+                    progress_inp = gr.Textbox(
+                        "", label="Status", interactive=False, lines=1
                     )
                 with gr.Tab("Replace"):
                     with gr.Group():
@@ -1042,6 +1055,7 @@ with gr.Blocks(
                     show_label=False,
                     columns=config.get("gallery_columns", 4),
                     preview=True,
+                    interactive=False,
                 )
                 with gr.Row():
                     send_inp_i2i_btn = gr.Button("Send to i2i")
@@ -1082,7 +1096,7 @@ with gr.Blocks(
                 seed_inp,
                 consistency_strength_inp,
             ],
-            outputs=[gallery_inp, meta_state_inp],
+            outputs=[gallery_inp, meta_state_inp, progress_inp],
             show_progress_on=progress_inp,
             concurrency_id="gpu",
         )
@@ -1093,7 +1107,9 @@ with gr.Blocks(
         )
         reuse_seed_inp_btn.click(_extract_seed, meta_view_inp, seed_inp)
     gallery_inp.select(
-        show_meta, inputs=meta_state_inp, outputs=[meta_view_inp, sel_inp_path, sel_idx_inp]
+        show_meta,
+        inputs=meta_state_inp,
+        outputs=[meta_view_inp, sel_inp_path, sel_idx_inp],
     )
     gallery_inp.change(
         sync_meta,
