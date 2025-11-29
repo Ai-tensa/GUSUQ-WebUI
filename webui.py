@@ -358,6 +358,9 @@ def generate_inpaint(
         gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
     input_image = editor_val["background"].convert("RGB")
     mask_image = _extract_mask(editor_val)
+    if is_edit_model: # Normal inpaint models resize in their pipe
+        input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
+        mask_image = mask_image.resize((width, height), Image.Resampling.LANCZOS)
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     pipe = pm.get_pipeline(model, sampler, mode="inpaint")

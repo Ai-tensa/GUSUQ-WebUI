@@ -355,20 +355,23 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
         generator,
         latents=None,
         consistency_strength=0.0,
+        original_image=None,
     ):
+        if original_image is not None:
+            original_image = original_image.to(device=device, dtype=dtype)
+            original_image_latents = self._encode_vae_image(image=original_image, generator=generator)
+
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae_scale_factor * 2))
 
         shape = (batch_size, 1, num_channels_latents, height, width)  # [B,1,z,H',W']
-
-        image_latents = None
         if images is not None:
             if not isinstance(images, list):
                 images = [images]
             all_image_latents = []
-            first_image_latents = None
+            first_image_latents = original_image_latents if original_image is not None else None
             for image in images:
                 image = image.to(device=device, dtype=dtype)
                 if image.shape[1] != self.latent_channels:
@@ -408,16 +411,20 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
             latent_mean = first_image_latents.mean(dim=2, keepdim=True)
             noise_mean = noise.mean(dim=2, keepdim=True)
 
-            noise = noise + consistency_strength * (latent_mean - noise_mean)
+            if consistency_strength != 0.0:
+                noise = noise + consistency_strength * (latent_mean - noise_mean)
 
             latents = self.scheduler.scale_noise(first_image_latents, timestep, noise)
             noise = self._pack_latents(noise, batch_size, num_channels_latents, height, width)
             latents = self._pack_latents(latents, batch_size, num_channels_latents, height, width)
+            first_image_latents = self._pack_latents(
+                first_image_latents, batch_size, num_channels_latents, height, width
+            )
         else:
             latents = latents.to(device=device, dtype=dtype)
             noise = latents
 
-        return latents, noise, image_latents
+        return latents, noise, image_latents, first_image_latents
 
     @property
     def guidance_scale(self):
@@ -638,9 +645,8 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
         image_size = image[0].size if isinstance(image, list) else image.size
         calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
 
-        # height and width are the same as the calculated height and width
-        height = calculated_height
-        width = calculated_width
+        height = height or calculated_height
+        width = width or calculated_width
 
         multiple_of = self.vae_scale_factor * 2
         width = width // multiple_of * multiple_of
@@ -690,6 +696,7 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
             vae_image_sizes = []
             vae_images = []
             original_image = None
+            
             for img in image:
                 image_width, image_height = img.size
                 condition_width, condition_height = calculate_dimensions(
@@ -699,11 +706,10 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
                 condition_image_sizes.append((condition_width, condition_height))
                 vae_image_sizes.append((vae_width, vae_height))
                 condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
-                img = self.image_processor.resize(img, calculated_height, calculated_width)
                 if original_image is None:
-                    original_image = img
+                    original_image = self.image_processor.resize(img, height, width)
                 vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
-            
+            original_image_tensor = self.image_processor.preprocess(original_image, height, width).unsqueeze(2)
 
         has_neg_prompt = negative_prompt is not None or (
             negative_prompt_embeds is not None and negative_prompt_embeds_mask is not None
@@ -768,7 +774,7 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
 
         # 5. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels // 4
-        latents, noise, image_latents = self.prepare_latents(
+        latents, noise, image_latents, first_image_latents = self.prepare_latents(
             vae_images,
             latent_timestep,
             batch_size * num_images_per_prompt,
@@ -780,6 +786,7 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
             generator,
             latents,
             consistency_strength=consistency_strength,
+            original_image=original_image_tensor,
         )
 
         mask_condition = self.mask_processor.preprocess(
@@ -787,9 +794,10 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
         )
 
         if masked_image_latents is None:
-            masked_image = vae_images[0] * (mask_condition < 0.5)
+            masked_image = original_image_tensor * (mask_condition < 0.5)
         else:
             masked_image = masked_image_latents
+        del original_image_tensor
 
         mask, masked_image_latents = self.prepare_mask_latents(
             mask_condition,
@@ -893,7 +901,7 @@ class QwenImageEditPlusInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMix
                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
                 # for 64 channel transformer only.
-                init_latents_proper = torch.narrow(image_latents, 1, 0, latents.shape[1])
+                init_latents_proper = first_image_latents
                 init_mask = mask
 
                 if i < len(timesteps) - 1:
