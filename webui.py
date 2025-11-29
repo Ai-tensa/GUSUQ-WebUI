@@ -97,13 +97,14 @@ def _import_dims(img):
     return round32(w), round32(h)
 
 
-def _rescale_dims(w, h, model_name):
-    if not isinstance(w, (int, float)) or not isinstance(h, (int, float)):
-        return gr.update(), gr.update()
+def rescale_dims(w, h, model_name):
     if "edit" not in str(model_name).lower():
         gr.Info("Rescaling is only available for Edit models.")
         return gr.update(), gr.update()
+    return _rescale_dims(w, h)
 
+
+def _rescale_dims(w, h):
     r = float(w) / float(h)
     new_h = math.sqrt(EDIT_TRAIN_PIXELS / r)
     new_w = new_h * r
@@ -205,6 +206,7 @@ def generate_i2i(
     prompt,
     negative,
     cfg,
+    resize_before_i2i,
     strength,
     steps,
     width,
@@ -216,10 +218,24 @@ def generate_i2i(
     consistency_strength,
 ):
     is_edit_model = vit_model_table[model]["edit"]
-    if consistency_strength != 0.0 and not is_edit_model:
-        gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
-    if strength != 1.0 and is_edit_model:
-        gr.Info("Strength is not used for Edit models. Ignoring it.")
+    
+    # Validation and adjustments
+    if is_edit_model:
+        if strength != 1.0:
+            gr.Info("Strength is not used for Edit models. Ignoring it.")
+        if not resize_before_i2i and consistency_strength != 0.0:
+            gr.Info("For consistency strength, input image must be resized. Setting consistency strength to 0.0.")
+            consistency_strength = 0.0
+    else:
+        if not resize_before_i2i:
+            gr.Info("Normal i2i models always resize input. Strength is set to 1.0.")
+            resize_before_i2i = True
+            strength = 1.0
+        if consistency_strength != 0.0:
+            gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
+    if resize_before_i2i and is_edit_model: # Normal i2i models resize in their pipe
+        input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
+
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     print("RSS before get pipe:", rss_mb(), "MB")
@@ -529,13 +545,13 @@ with gr.Blocks(
                             label="Height",
                         )
                     with gr.Row():
-                        gr.Button("⇅", elem_id="btn_swap_dims").click(
+                        gr.Button("⇅").click(
                             _swap_dims,
                             inputs=[width_t2i, height_t2i],
                             outputs=[width_t2i, height_t2i],
                         )
-                        gr.Button("⤧", elem_id="btn_rescale_dims").click(
-                            _rescale_dims,
+                        gr.Button("⤧").click(
+                            rescale_dims,
                             inputs=[width_t2i, height_t2i, model_dd],
                             outputs=[width_t2i, height_t2i],
                         )
@@ -578,11 +594,11 @@ with gr.Blocks(
                             value=-1, label="Seed", precision=0, scale=3
                         )
                         with gr.Column():
-                            gr.Button("🎲", elem_id="btn_random_seed").click(
+                            gr.Button("🎲").click(
                                 lambda: -1, None, seed_box_t2i
                             )
                             reuse_seed_btn_t2i = gr.Button(
-                                "♻", elem_id="btn_reuse_seed"
+                                "♻"
                             )
 
             with gr.Column(scale=3):
@@ -727,7 +743,7 @@ with gr.Blocks(
                             outputs=[width_i2i, height_i2i],
                         )
                         gr.Button("⤧").click(
-                            _rescale_dims,
+                            rescale_dims,
                             inputs=[width_i2i, height_i2i, model_dd],
                             outputs=[width_i2i, height_i2i],
                         )
@@ -749,7 +765,11 @@ with gr.Blocks(
                     )
 
                 with gr.Group():
-                    with gr.Row():
+                    resize_before_i2i = gr.Checkbox(
+                        label="Resize Picture 1 to selected dimensions before processing",
+                        value=False,
+                    )
+                    with gr.Row(visible=False) as strengths_i2i:
                         denoising_strength_i2i = gr.Slider(
                             config.get("denoising_strength_min", 0.0),
                             config.get("denoising_strength_max", 1.0),
@@ -827,6 +847,7 @@ with gr.Blocks(
                 prompt_i2i,
                 negative_i2i,
                 cfg_i2i,
+                resize_before_i2i,
                 denoising_strength_i2i,
                 steps_i2i,
                 width_i2i,
@@ -847,6 +868,9 @@ with gr.Blocks(
             outputs=[prompt_i2i, negative_i2i],
         )
         reuse_seed_i2i_btn.click(_extract_seed, meta_view_i2i, seed_i2i)
+        resize_before_i2i.change(
+            lambda resize: gr.update(visible=resize), resize_before_i2i, strengths_i2i
+        )
         gallery_i2i.select(
             show_meta, inputs=meta_state_i2i, outputs=[meta_view_i2i, sel_i2i_path, sel_idx_i2i]
         )
@@ -945,7 +969,7 @@ with gr.Blocks(
                             outputs=[width_inp, height_inp],
                         )
                         gr.Button("⤧").click(
-                            _rescale_dims,
+                            rescale_dims,
                             inputs=[width_inp, height_inp, model_dd],
                             outputs=[width_inp, height_inp],
                         )

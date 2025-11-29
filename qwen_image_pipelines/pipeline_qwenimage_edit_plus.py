@@ -396,7 +396,8 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
 
             latent_mean = first_image_latents.mean(dim=2, keepdim=True)
             noise_mean = latents.mean(dim=2, keepdim=True)
-            latents = latents + consistency_strength * (latent_mean - noise_mean)
+            if consistency_strength != 0.0:
+                latents = latents + consistency_strength * (latent_mean - noise_mean)
 
             latents = self._pack_latents(latents, batch_size, num_channels_latents, height, width)
         else:
