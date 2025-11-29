@@ -6,15 +6,16 @@ from transformers import (
     Qwen2_5_VLProcessor,
 )
 from diffusers import (
-    QwenImagePipeline, QwenImageImg2ImgPipeline,
-    QwenImageInpaintPipeline,
     FlowMatchEulerDiscreteScheduler,
     DiffusionPipeline,
 )
 from nunchaku.models.transformers.transformer_qwenimage import (
     NunchakuQwenImageTransformer2DModel
 )
-from qwen_image_pipelines import QwenImageEditPlusPipeline, QwenImageEditPlusInpaintPipeline
+from qwen_image_pipelines import (
+    QwenImagePipeline, QwenImageImg2ImgPipeline, QwenImageInpaintPipeline,
+    QwenImageEditPlusPipeline, QwenImageEditPlusInpaintPipeline,
+)
 from constants import (
     SAMPLERS,
     FLOWMATCH_CFG,

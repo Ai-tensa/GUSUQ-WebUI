@@ -1,3 +1,4 @@
+# Copied and modified from diffusers/pipelines/qwenimage/pipeline_output.py
 from dataclasses import dataclass
 from typing import List, Union
 

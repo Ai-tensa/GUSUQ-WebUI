@@ -1,3 +1,4 @@
+# Copied and modified from diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
 # Copyright 2025 Qwen-Image Team and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

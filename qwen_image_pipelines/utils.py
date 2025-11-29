@@ -1,3 +1,4 @@
+# Copied and modified from diffusers/pipelines/qwenimage
 import inspect
 from typing import List, Optional, Union
 

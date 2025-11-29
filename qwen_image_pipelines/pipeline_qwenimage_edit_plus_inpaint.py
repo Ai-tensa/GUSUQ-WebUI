@@ -1,4 +1,4 @@
-# Copied from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus and pipeline_qwenimage_edit_inpaint
+# Copied and modified from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus and pipeline_qwenimage_edit_inpaint
 # Its license is defined from the original repository of diffusers
 
 from typing import Any, Callable, Dict, List, Optional, Union
