@@ -1,10 +1,12 @@
 import torch
 from PIL import Image
+from time import perf_counter
 from pipeline_manager import PipelineManager
 from utils import release_memory_resources
 
 def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str,
                  max_new_tokens: int = 1024, temperature: float = 0.7) -> str:
+    start_time = perf_counter()
     msgs = [{"role": "user",
              "content": [{"type": "image", "image": image},
                          {"type": "text", "text": prompt}]}]
@@ -31,10 +33,11 @@ def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str,
         pm.text_encoder.to("cpu", non_blocking=True)
 
     release_memory_resources()
-
+    elapsed = perf_counter() - start_time
+    status = f"Inference completed in {elapsed:.1f} seconds."
     return tokenizer.batch_decode(
         gen_ids, skip_special_tokens=True,
-        clean_up_tokenization_spaces=True)[0]
+        clean_up_tokenization_spaces=True)[0], status
 
 def build_caption_prompt(length: str, word_limit: int) -> str:
     if word_limit and word_limit > 0:

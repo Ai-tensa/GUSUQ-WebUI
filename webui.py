@@ -1158,12 +1158,11 @@ with gr.Blocks(
                             show_copy_button=True,
                             value=build_caption_prompt("default", None),
                         )
-                        cap_btn = gr.Button("Generate Caption", variant="primary")
-                        progress_cap = gr.HTML(
-                            "<div style='width:100%;height:90px;'></div>",
-                            elem_id="progress_cap",
-                            padding=False,
-                        )
+                        with gr.Row(equal_height=True):
+                            cap_btn = gr.Button("Generate Caption", variant="primary")
+                            progress_cap = gr.Textbox(
+                                "", label="Status", interactive=False, lines=1
+                            )
                         cap_out = gr.Textbox(
                             label="Caption", lines=4, show_copy_button=True
                         )
@@ -1188,7 +1187,7 @@ with gr.Blocks(
                 cap_btn.click(
                     partial(vl_generate, pm),
                     inputs=[img_cap, prompt_cap],
-                    outputs=cap_out,
+                    outputs=[cap_out, progress_cap],
                     api_name="vlm_caption",
                     show_progress_on=progress_cap,
                     concurrency_id="gpu",
@@ -1211,12 +1210,11 @@ with gr.Blocks(
                         q_box = gr.Textbox(
                             label="Question", lines=2, show_copy_button=True
                         )
-                        ask_btn = gr.Button("Ask", variant="primary")
-                        progress_vqa = gr.HTML(
-                            "<div style='width:100%;height:90px;'></div>",
-                            elem_id="progress_vqa",
-                            padding=False,
-                        )
+                        with gr.Row(equal_height=True):
+                            ask_btn = gr.Button("Ask", variant="primary")
+                            progress_vqa = gr.Textbox(
+                                "", label="Status", interactive=False, lines=1
+                            )
                         ans_out = gr.Textbox(
                             label="Answer", lines=4, show_copy_button=True
                         )
@@ -1230,7 +1228,7 @@ with gr.Blocks(
                 ask_btn.click(
                     partial(vl_generate, pm),
                     inputs=[img_vqa, q_box],
-                    outputs=ans_out,
+                    outputs=[ans_out, progress_vqa],
                     api_name="vlm_VQA",
                     show_progress_on=progress_vqa,
                     concurrency_id="gpu",
