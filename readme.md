@@ -2,6 +2,12 @@
 
 ## Installation
 
+- requirements:
+    - A system with a compatible NVIDIA GPU
+    - GPU memory: 12GB+ VRAM (8GB / 11GB may be work with low_vram offloading, but not tested)
+    - System memory: 32GB+? (32GB may be tight)
+    - Python 3 (recommended 3.11 or later)
+
 1. Install system dependencies:
     - Install git, CUDA
     - Install python and build tools
@@ -79,3 +85,9 @@
 - mid_vram: model-wise offloading both the text encoder and DiT to CPU when not in use. Balances VRAM usage and performance. 16GB VRAM required.
 - high_vram: Offloads the text encoder to CPU when not in use. 18GB VRAM required. If you cannot run with high_vram, try mid_vram or low_vram.
 - no_offload: No offloading. Requires the most VRAM. 32GB+ VRAM recommended.
+
+## License
+This repository is released under the Apache License 2.0.
+
+### Third-party / Derived code
+- `qwen_image_pipelines/`: contains modifications of [HuggingFace Diffusers](https://github.com/huggingface/diffusers), licensed under the Apache License 2.0.
