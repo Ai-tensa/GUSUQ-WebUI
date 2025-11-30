@@ -1,4 +1,4 @@
-# ── Qwen-Image ──────────────
+# Qwen-Image
 - name: "SVDQ INT4 r32"
   path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-int4_r32-qwen-image.safetensors"
   edit: false
@@ -18,7 +18,7 @@
   path_or_url: "nunchaku-tech/nunchaku-qwen-image/svdq-int4_r128-qwen-image-lightningv1.1-8steps.safetensors"
   edit: false
 
-# ── Qwen-Image-Edit ──────────
+# Qwen-Image-Edit
 - name: "Edit INT4 r32"
   path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-int4_r32-qwen-image-edit.safetensors"
   edit: true
@@ -38,7 +38,7 @@
   path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit/svdq-int4_r128-qwen-image-edit-lightningv1.0-8steps.safetensors"
   edit: true
 
-# ── Qwen-Image-Edit 2509 ─────
+# Qwen-Image-Edit 2509
 - name: "Edit2509 INT4 r32"
   path_or_url: "nunchaku-tech/nunchaku-qwen-image-edit-2509/svdq-int4_r32-qwen-image-edit-2509.safetensors"
   edit: true
