@@ -5,6 +5,10 @@ save_subdir_by_date: true
 
 # Default common generation parameters (t2i, i2i, inpainting, etc.)
 
+## Model selection defaults
+default_vit_model: "Edit2509 Lightning 4-step r32" # default ViT model for image generation
+default_vlm_model: "Qwen2.5-VL-7B-AWQ" # default VLM model for image generation
+
 ## Gallery configuration
 gallery_columns: 4 # number of columns in output image gallery
 

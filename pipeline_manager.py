@@ -19,10 +19,8 @@ from qwen_image_pipelines import (
 from constants import (
     SAMPLERS,
     FLOWMATCH_CFG,
-    TEXT_ENCODER_ID,
-    DEFAULT_TEXT_ENCODER_ID,
-    DEFAULT_QWEN_IMAGE_ID,
-    DEFAULT_QWEN_IMAGE_EDIT_ID,
+    BASE_QWEN_IMAGE_ID,
+    BASE_QWEN_IMAGE_EDIT_ID,
 )
 from utils import release_memory_resources
 
@@ -73,27 +71,34 @@ def patch_encode_prompt(pipe, opt_policy):
     pipe.encode_prompt = MethodType(encode_prompt_cast, pipe)
 
 class PipelineManager():
-    def __init__(self, opt_pol_cfg: dict, vit_model_table: dict):
+    def __init__(self, opt_pol_cfg: dict, vlm_model_table: dict, vit_model_table: dict):
         self.pipes: dict[str, DiffusionPipeline] = {}
-        self.current_model = None
+        self.current_vlm = None
+        self.current_vit = None
         self.text_encoder = None
         self.tokenizer = None
         self.vision_processor = None
         self.transformer = None
         self.vae = None
         self.opt_pol_cfg = opt_pol_cfg
+        self.vlm_model_table = vlm_model_table
         self.vit_model_table = vit_model_table
 
-    def get_pipeline(self, model_key: str, sampler_name: str, mode: str = "t2i"):
-        is_edit_model = self.vit_model_table[model_key]["edit"]
+    def get_pipeline(self, vit_model_key: str, sampler_name: str, mode: str = "t2i", vlm_model_key: str = None):
+        is_edit_model = self.vit_model_table[vit_model_key]["edit"]
         # First load
         if self.pipes == {}:
-            self._load_vlm()
-            self._load_transformer(model_key)
+            del_vlm = vlm_model_key != self.current_vlm
+            del_vit = vit_model_key != self.current_vit
+            if del_vlm or del_vit:
+                self.clear_pipelines(del_vlm=del_vlm, del_vit=del_vit)
+                release_memory_resources()
+            self._load_vlm(vlm_model_key)
+            self._load_transformer(vit_model_key)
             scheduler   = SAMPLERS[sampler_name].from_config(FLOWMATCH_CFG)
             if self.vae is None:
                 self.pipes["t2i"] = QwenImagePipeline.from_pretrained(
-                    DEFAULT_QWEN_IMAGE_ID,
+                    BASE_QWEN_IMAGE_ID,
                     text_encoder=self.text_encoder,
                     tokenizer=self.tokenizer,
                     transformer=self.transformer,
@@ -104,7 +109,7 @@ class PipelineManager():
                 self.vae = self.pipes["t2i"].vae
             else:
                 self.pipes["t2i"] = QwenImagePipeline.from_pretrained(
-                    DEFAULT_QWEN_IMAGE_ID,
+                    BASE_QWEN_IMAGE_ID,
                     text_encoder=self.text_encoder,
                     tokenizer=self.tokenizer,
                     transformer=self.transformer,
@@ -114,13 +119,14 @@ class PipelineManager():
                     low_cpu_mem_usage=True,
                 )
             self.pipes["i2i"] = QwenImageImg2ImgPipeline.from_pretrained(
-                DEFAULT_QWEN_IMAGE_ID, **self.pipes["t2i"].components)
+                BASE_QWEN_IMAGE_ID, **self.pipes["t2i"].components)
             self.pipes["i2i_edit"] = QwenImageEditPlusPipeline.from_pretrained(
-                DEFAULT_QWEN_IMAGE_EDIT_ID, vision_processor=self.vision_processor, **self.pipes["t2i"].components)
+                BASE_QWEN_IMAGE_EDIT_ID, vision_processor=self.vision_processor, **self.pipes["t2i"].components)
             self.pipes["inpaint"] = QwenImageInpaintPipeline.from_pretrained(
-                DEFAULT_QWEN_IMAGE_ID, **self.pipes["t2i"].components)
+                BASE_QWEN_IMAGE_ID, **self.pipes["t2i"].components)
             self.pipes["inpaint_edit"] = QwenImageEditPlusInpaintPipeline.from_pretrained(
-                DEFAULT_QWEN_IMAGE_EDIT_ID, **self.pipes["i2i_edit"].components)
+                BASE_QWEN_IMAGE_EDIT_ID, **self.pipes["i2i_edit"].components)
+
             
             opt_policy = self.opt_pol_cfg.get("opt_policy", None)
             if not opt_policy == "no_offload":
@@ -156,7 +162,8 @@ class PipelineManager():
             else:
                 print(f"Unknown opt_policy: {opt_policy}")
                 print("Available options: high_vram | mid_vram | low_vram")
-            self.current_model = model_key
+
+            release_memory_resources()
             if mode == "t2i":
                 return self.pipes["t2i"]
             elif mode == "i2i":
@@ -165,13 +172,12 @@ class PipelineManager():
                 return self.pipes["inpaint_edit"] if is_edit_model else self.pipes["inpaint"]
 
         # Model switch
-        if model_key != self.current_model:
-            self.pipes.clear()
-            del self.transformer
-            self.transformer = None
-            release_memory_resources()
+        if vlm_model_key != self.current_vlm or vit_model_key != self.current_vit:
+            del_vlm = vlm_model_key != self.current_vlm
+            del_vit = vit_model_key != self.current_vit
+            self.clear_pipelines(del_vlm=del_vlm, del_vit=del_vit)
 
-            return self.get_pipeline(model_key, sampler_name, mode)
+            return self.get_pipeline(vit_model_key, sampler_name, mode, vlm_model_key = vlm_model_key)
 
         # Sampler switch
         if self.pipes["t2i"].scheduler.__class__ is not SAMPLERS.get(sampler_name, FlowMatchEulerDiscreteScheduler):
@@ -186,20 +192,60 @@ class PipelineManager():
             return self.pipes["i2i_edit"] if is_edit_model else self.pipes["i2i"]
         else:
             return self.pipes["inpaint_edit"] if is_edit_model else self.pipes["inpaint"]
+        
+    def get_vlm(self, model_key: str = None):
+        if self.text_encoder is not None and (model_key != self.current_vlm):
+            self.clear_pipelines(del_vlm=True)
 
-    def _load_vlm(self):
-        if self.text_encoder is None or self.tokenizer is None or self.vision_processor is None:
-            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                TEXT_ENCODER_ID,
-                torch_dtype=torch.float16 if "AWQ" in TEXT_ENCODER_ID else torch.bfloat16,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-            )
-            self.tokenizer = AutoTokenizer.from_pretrained(TEXT_ENCODER_ID, use_fast=False)
-            self.vision_processor = Qwen2_5_VLProcessor.from_pretrained(DEFAULT_TEXT_ENCODER_ID)
-            release_memory_resources()
+        self._load_vlm(model_key)
+        release_memory_resources()
+        return self.text_encoder, self.tokenizer, self.vision_processor
+
+    def clear_pipelines(self, del_vlm: bool = False, del_vit: bool = False):
+        self.pipes.clear()
+        if del_vlm:
+            del self.text_encoder
+            self.text_encoder = None
+            del self.tokenizer
+            self.tokenizer = None
+            del self.vision_processor
+            self.vision_processor = None
+            self.current_vlm = None
+        if del_vit:
+            del self.transformer
+            self.transformer = None
+            self.current_vit = None
+        release_memory_resources()
+
+    def _load_vlm(self, model_key: str = None):
+        if self.text_encoder is not None:
+            if model_key != self.current_vlm:
+                print("Please unload previous VLM model first before loading a new one.")
+                raise RuntimeError("Previous VLM model not unloaded.")
+            return
+        if model_key is None:
+            model_key = list(self.vlm_model_table.keys())[0]
+        self.current_vlm = model_key
+        cfg = self.vlm_model_table[model_key]
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            cfg["id"],
+            torch_dtype=getattr(torch, cfg.get("dtype", "bfloat16")),
+            trust_remote_code=True,
+            low_cpu_mem_usage=True,
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(cfg["id"], use_fast=False)
+        self.vision_processor = Qwen2_5_VLProcessor.from_pretrained(cfg["id"], low_cpu_mem_usage=True)
+        release_memory_resources()
 
     def _load_transformer(self, model_key: str):
+        if self.transformer is not None:
+            if model_key != self.current_vit:
+                print("Please unload previous transformer model first before loading a new one.")
+                raise RuntimeError("Previous transformer model not unloaded.")
+            return
+        if model_key is None:
+            model_key = list(self.vit_model_table.keys())[0]
+        self.current_vit = model_key
         self.transformer = NunchakuQwenImageTransformer2DModel.from_pretrained(
             self.vit_model_table[model_key]["path"],
             low_cpu_mem_usage=True,

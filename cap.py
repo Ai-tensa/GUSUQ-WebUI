@@ -4,14 +4,14 @@ from time import perf_counter
 from pipeline_manager import PipelineManager
 from utils import release_memory_resources
 
-def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str,
+def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str, vlm_model_key: str = None,
                  max_new_tokens: int = 1024, temperature: float = 0.7) -> str:
     start_time = perf_counter()
     msgs = [{"role": "user",
              "content": [{"type": "image", "image": image},
                          {"type": "text", "text": prompt}]}]
     opt_policy = pm.opt_pol_cfg.get("opt_policy", None)
-    pm._load_vlm()
+    pm.get_vlm(vlm_model_key)
     proc = pm.vision_processor
     tokenizer = pm.tokenizer
     inputs = proc.apply_chat_template(

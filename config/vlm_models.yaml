@@ -1,0 +1,5 @@
+- name: Qwen2.5-VL-7B
+  path_or_id: Qwen/Qwen2.5-VL-7B-Instruct
+- name: Qwen2.5-VL-7B-AWQ
+  path_or_id: Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+  dtype: float16 # Optional, specify to override default dtype (bfloat16)

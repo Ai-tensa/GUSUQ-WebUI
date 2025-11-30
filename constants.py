@@ -28,10 +28,21 @@ FLOWMATCH_CFG = {
 }
 
 
-TEXT_ENCODER_ID = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
-DEFAULT_TEXT_ENCODER_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-DEFAULT_QWEN_IMAGE_ID = "Qwen/Qwen-Image"
-DEFAULT_QWEN_IMAGE_EDIT_ID = "Qwen/Qwen-Image-Edit-2509"
+BASE_QWEN_IMAGE_ID = "Qwen/Qwen-Image"
+BASE_QWEN_IMAGE_EDIT_ID = "Qwen/Qwen-Image-Edit-2509"
+
+
+def load_vlm_model_table(yaml_path: Path) -> dict[str, dict[str, Any]]:
+    with open(yaml_path, "r") as f:
+        raw = yaml.safe_load(f) or []
+    table = {}
+    for item in raw:
+        name = item["name"]
+        table[name] = {
+            "id": item["path_or_id"],
+            "dtype": item.get("dtype", "bfloat16"),
+        }
+    return table
 
 
 def load_vit_model_table(yaml_path: Path) -> dict[str, dict[str, Any]]:

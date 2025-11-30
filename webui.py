@@ -14,6 +14,7 @@ from time import perf_counter
 from pipeline_manager import PipelineManager
 from constants import (
     SAMPLERS,
+    load_vlm_model_table,
     load_vit_model_table,
 )
 from cap import build_caption_prompt, vl_generate
@@ -44,6 +45,12 @@ parser.add_argument(
     help="Path to optimization-policy YAML",
 )
 parser.add_argument(
+    "--vlm-models-yaml",
+    type=Path,
+    default=Path("config/vlm_models.yaml"),
+    help="Path to VLM models YAML",
+)
+parser.add_argument(
     "--vit-models-yaml",
     type=Path,
     default=Path("config/vit_models.yaml"),
@@ -62,14 +69,22 @@ if not args.opt_pol_yaml.exists():
     )
 with open(args.opt_pol_yaml, "r") as f:
     opt_pol_cfg = yaml.safe_load(f)
+if not args.vlm_models_yaml.exists():
+    raise FileNotFoundError(f"VLM models config not found: {args.vlm_models_yaml}")
+vlm_model_table = load_vlm_model_table(args.vlm_models_yaml)
 if not args.vit_models_yaml.exists():
     raise FileNotFoundError(f"ViT models config not found: {args.vit_models_yaml}")
 vit_model_table = load_vit_model_table(args.vit_models_yaml)
+
+vlm_model_list = list(vlm_model_table.keys())
+vit_model_list = list(vit_model_table.keys())
+default_vlm = config.get("default_vlm_model", list(vlm_model_table.keys())[0])
+default_vit = config.get("default_vit_model", list(vit_model_table.keys())[0])
+
 BASE_OUTPUT_DIR = Path(config.get("output_dir", "outputs"))
 
 torch.backends.cuda.matmul.allow_tf32 = True
-pm = PipelineManager(opt_pol_cfg, vit_model_table)
-
+pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table)
 
 # ── helpers ───────────────────────────────────────────────────────────────
 EDIT_TRAIN_PIXELS = 1024 * 1024  # 1,048,576 px
@@ -134,14 +149,14 @@ def _extract_seed(meta):
 
 
 def generate_t2i(
-    model, prompt, negative, cfg, steps, width, height, bsz, bcnt, sampler, seed
+    vlm, vit, prompt, negative, cfg, steps, width, height, bsz, bcnt, sampler, seed
 ):
     start_time = perf_counter()
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
 
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(model, sampler)
+    pipe = pm.get_pipeline(vit, sampler, vlm_model_key=vlm, mode="t2i")
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
@@ -174,7 +189,7 @@ def generate_t2i(
             s = base_seed + i * bsz + j
             meta = dict(
                 ts=ts,
-                model=model,
+                model=vit,
                 prompt=prompt,
                 negative=negative,
                 sampler=sampler,
@@ -199,7 +214,8 @@ def generate_t2i(
 
 
 def generate_i2i(
-    model,
+    vlm,
+    vit,
     input_image,
     enable_ref1,
     ref_image1,
@@ -222,7 +238,7 @@ def generate_i2i(
     consistency_strength,
 ):
     start_time = perf_counter()
-    is_edit_model = vit_model_table[model]["edit"]
+    is_edit_model = vit_model_table[vit]["edit"]
 
     # Validation and adjustments
     if is_edit_model:
@@ -248,7 +264,7 @@ def generate_i2i(
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(model, sampler, mode="i2i")
+    pipe = pm.get_pipeline(vit, sampler, mode="i2i", vlm_model_key=vlm)
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
@@ -309,7 +325,7 @@ def generate_i2i(
             s = base_seed + i * bsz + j
             meta = dict(
                 ts=ts,
-                model=model,
+                model=vit,
                 prompt=prompt,
                 negative=negative,
                 sampler=sampler,
@@ -343,7 +359,8 @@ def generate_i2i(
 
 
 def generate_inpaint(
-    model,
+    vlm,
+    vit,
     editor_val,
     enable_ref1,
     ref_image1,
@@ -365,7 +382,7 @@ def generate_inpaint(
     consistency_strength,
 ):
     start_time = perf_counter()
-    is_edit_model = vit_model_table[model]["edit"]
+    is_edit_model = vit_model_table[vit]["edit"]
     if consistency_strength != 0.0 and not is_edit_model:
         gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
     input_image = editor_val["background"].convert("RGB")
@@ -375,7 +392,7 @@ def generate_inpaint(
         mask_image = mask_image.resize((width, height), Image.Resampling.LANCZOS)
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
-    pipe = pm.get_pipeline(model, sampler, mode="inpaint")
+    pipe = pm.get_pipeline(vit, sampler, mode="inpaint", vlm_model_key=vlm)
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
         for i in range(bsz * bcnt)
@@ -438,7 +455,7 @@ def generate_inpaint(
             s = base_seed + i * bsz + j
             meta = dict(
                 ts=ts,
-                model=model,
+                model=vit,
                 prompt=prompt,
                 negative=negative,
                 sampler=sampler,
@@ -499,12 +516,17 @@ with gr.Blocks(
     fill_height=True,
 ) as demo:
     with gr.Row():
-        vit_model_list = list(vit_model_table.keys())
-        model_dd = gr.Dropdown(
+        vit_dd = gr.Dropdown(
             vit_model_list,
-            value=vit_model_list[0],
-            label="Model",
-            scale=7,
+            value=default_vit,
+            label="ViT Model",
+            scale=6,
+        )
+        vlm_dd = gr.Dropdown(
+            vlm_model_list,
+            value=default_vlm,
+            label="VLM Model",
+            scale=1,
         )
         sampler = gr.Dropdown(
             list(SAMPLERS.keys()), value="FlowMatchEuler", label="Sampler"
@@ -568,7 +590,7 @@ with gr.Blocks(
                         )
                         gr.Button("⤧").click(
                             rescale_dims,
-                            inputs=[width_t2i, height_t2i, model_dd],
+                            inputs=[width_t2i, height_t2i, vit_dd],
                             outputs=[width_t2i, height_t2i],
                         )
 
@@ -641,7 +663,8 @@ with gr.Blocks(
         gen_btn_t2i.click(
             generate_t2i,
             inputs=[
-                model_dd,
+                vlm_dd,
+                vit_dd,
                 prompt_t2i,
                 negative_t2i,
                 cfg_t2i,
@@ -758,7 +781,7 @@ with gr.Blocks(
                         )
                         gr.Button("⤧").click(
                             rescale_dims,
-                            inputs=[width_i2i, height_i2i, model_dd],
+                            inputs=[width_i2i, height_i2i, vit_dd],
                             outputs=[width_i2i, height_i2i],
                         )
 
@@ -851,7 +874,8 @@ with gr.Blocks(
         gen_i2i_btn.click(
             generate_i2i,
             inputs=[
-                model_dd,
+                vlm_dd,
+                vit_dd,
                 init_img_i2i,
                 enable_ref1_i2i,
                 ref_img1_i2i,
@@ -986,7 +1010,7 @@ with gr.Blocks(
                         )
                         gr.Button("⤧").click(
                             rescale_dims,
-                            inputs=[width_inp, height_inp, model_dd],
+                            inputs=[width_inp, height_inp, vit_dd],
                             outputs=[width_inp, height_inp],
                         )
 
@@ -1075,7 +1099,8 @@ with gr.Blocks(
         gen_inp_btn.click(
             generate_inpaint,
             inputs=[
-                model_dd,
+                vlm_dd,
+                vit_dd,
                 img_mask_inp,
                 enable_ref1_inp,
                 ref_img1_inp,
@@ -1186,7 +1211,7 @@ with gr.Blocks(
                 )
                 cap_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[img_cap, prompt_cap],
+                    inputs=[img_cap, prompt_cap, vlm_dd],
                     outputs=[cap_out, progress_cap],
                     api_name="vlm_caption",
                     show_progress_on=progress_cap,
@@ -1227,7 +1252,7 @@ with gr.Blocks(
                 )
                 ask_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[img_vqa, q_box],
+                    inputs=[img_vqa, q_box, vlm_dd],
                     outputs=[ans_out, progress_vqa],
                     api_name="vlm_VQA",
                     show_progress_on=progress_vqa,

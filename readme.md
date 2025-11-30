@@ -64,11 +64,20 @@
             ```
         3. WSL
             Not tested yet. Please try Windows installation steps above or refer to the above installation guide.
-    4. Desable AutoAWQ of Qwen-VL-7B-Instruct model in `constants.py` if you cannot install AutoAWQ:
-        ```python
-        # TEXT_ENCODER_ID = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ" # 7GB model with AutoAWQ)
-        TEXT_ENCODER_ID = "Qwen/Qwen2.5-VL-7B-Instruct" # 14GB, but "low_vram" offloading works well even less than 16GB VRAM
-        ```
+    4. Disable AutoAWQ model if you cannot install AutoAWQ:
+        1. Update `default_vlm_model` in `config/user_config.yaml`:
+            ```yaml
+            ## Model selection defaults
+            default_vlm_model: "Qwen2.5-VL-7B" # default VLM model for image generation
+            ```
+        2. Delete AutoAWQ model entry in `config/vlm_models.yaml`:
+            ```yaml
+            - name: Qwen2.5-VL-7B # 14GB, but "low_vram" offloading works well even less than 16GB VRAM
+              path_or_id: Qwen/Qwen2.5-VL-7B-Instruct
+            # - name: Qwen2.5-VL-7B-AWQ  # 7GB model with AutoAWQ)
+            #   path_or_id: Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+            #   dtype: float16 # Optional, specify to override default dtype (bfloat16)
+            ```
     5. Launch the web UI:
         ```bash
         python webui.py (--user-config-yaml path/to/your_config.yaml ...) # RTX 40xx orl older GPUs
