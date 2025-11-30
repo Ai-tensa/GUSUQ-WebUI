@@ -129,9 +129,8 @@ class PipelineManager():
 
             
             opt_policy = self.opt_pol_cfg.get("opt_policy", None)
-            if not opt_policy == "no_offload":
-                for _pipe in self.pipes.values():
-                    patch_encode_prompt(_pipe, opt_policy)
+            for _pipe in self.pipes.values():
+                patch_encode_prompt(_pipe, opt_policy)
             if self.opt_pol_cfg.get("enable_vae_slicing", True):
                 self.vae.enable_slicing()
             if self.opt_pol_cfg.get("enable_vae_tiling", False):
