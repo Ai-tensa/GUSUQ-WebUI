@@ -1,5 +1,7 @@
 # GUSUQ WebUI – Gradio-based Unified Simple UI for Qwen-image with Nunchaku
 
+![title](images/title.png)
+
 ## Installation
 
 - requirements:
@@ -94,6 +96,17 @@
 - mid_vram: model-wise offloading both the text encoder and DiT to CPU when not in use. Balances VRAM usage and performance. 16GB VRAM required.
 - high_vram: Offloads the text encoder to CPU when not in use. 18GB VRAM required. If you cannot run with high_vram, try mid_vram or low_vram.
 - no_offload: No offloading. Requires the most VRAM. 32GB+ VRAM recommended.
+
+## Usage (to be updated)
+
+### t2i - Text-to-Image Generation
+
+![t2i_screenshot](images/screenshot_t2i.jpg)
+
+### i2i - Image-to-Image Generation
+
+![i2i_screenshot](images/screenshot_i2i.jpg)
+![i2i_screenshot2](images/screenshot_i2i_2.jpg)
 
 ## License
 This repository is released under the Apache License 2.0.
