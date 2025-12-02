@@ -97,7 +97,6 @@ port = args.port or config.get("server_port", 7860)
 server_name = args.server_name or config.get("server_name", "127.0.0.1")
 if args.listen or config.get("listen", False):
     server_name = "0.0.0.0"
-share = args.share or config.get("share", False)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table)
