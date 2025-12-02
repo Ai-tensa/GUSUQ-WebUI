@@ -56,6 +56,16 @@ parser.add_argument(
     default=Path("config/vit_models.yaml"),
     help="Path to ViT models YAML",
 )
+parser.add_argument(
+    "--port", type=int, default=None, help="Port number for the Gradio server"
+)
+parser.add_argument(
+    "--server_name",
+    type=str,
+    default=None,
+    help="Server name or IP address for the Gradio server.",
+)
+parser.add_argument("--listen", action="store_true", help="Whether to listen on all interfaces")
 args = parser.parse_args()
 
 if not args.user_config_yaml.exists():
@@ -82,6 +92,12 @@ default_vlm = config.get("default_vlm_model", list(vlm_model_table.keys())[0])
 default_vit = config.get("default_vit_model", list(vit_model_table.keys())[0])
 
 BASE_OUTPUT_DIR = Path(config.get("output_dir", "outputs"))
+
+port = args.port or config.get("server_port", 7860)
+server_name = args.server_name or config.get("server_name", "127.0.0.1")
+if args.listen or config.get("listen", False):
+    server_name = "0.0.0.0"
+share = args.share or config.get("share", False)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table)
@@ -1562,4 +1578,7 @@ with gr.Blocks(
     send_inp_cap_btn.click(send_image, inputs=sel_inp_path, outputs=img_cap)
     send_inp_vqa_btn.click(send_image, inputs=sel_inp_path, outputs=img_vqa)
 
-demo.launch()
+demo.launch(
+    server_name=server_name,
+    server_port=port,
+)
