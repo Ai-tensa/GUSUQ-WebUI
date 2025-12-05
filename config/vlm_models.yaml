@@ -1,5 +1,41 @@
-- name: Qwen2.5-VL-7B
-  path_or_id: Qwen/Qwen2.5-VL-7B-Instruct
-- name: Qwen2.5-VL-7B-AWQ
-  path_or_id: Qwen/Qwen2.5-VL-7B-Instruct-AWQ
-  dtype: float16 # Optional, specify to override default dtype (bfloat16)
+Qwen2.5-VL:
+  model_class: transformers.Qwen2_5_VLForConditionalGeneration
+  processor_class: transformers.Qwen2_5_VLProcessor
+  tokenizer_class: transformers.AutoTokenizer
+  models:
+    - name: Qwen2.5-VL-7B
+      path_or_id: Qwen/Qwen2.5-VL-7B-Instruct
+      variants: 7B
+    - name: Qwen2.5-VL-7B-AWQ
+      path_or_id: Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+      dtype: float16 # Optional, specify to override default dtype (bfloat16). In AWQ models, float16 is used for non-quantized parts.
+      variants: 7B
+    - name: Qwen2.5-VL-32B-AWQ
+      path_or_id: Qwen/Qwen2.5-VL-32B-Instruct-AWQ
+      dtype: float16 # Optional, specify to override default dtype (bfloat16). In AWQ models, float16 is used for non-quantized parts.
+      variants: 32B
+Qwen3-VL:
+  model_class: transformers.Qwen3VLForConditionalGeneration
+  processor_class: transformers.Qwen3VLProcessor
+  tokenizer_class: transformers.AutoTokenizer
+  models:
+    - name: Qwen3-VL-4B
+      path_or_id: Qwen/Qwen3-VL-4B-Instruct
+      variants: 4B
+    - name: Qwen3-VL-4B-Thinking
+      path_or_id: Qwen/Qwen3-VL-4B-Thinking
+      variants: 4B
+    - name: Qwen3-VL-8B
+      path_or_id: Qwen/Qwen3-VL-8B-Instruct
+      variants: 8B
+    - name: Qwen3-VL-8B-Thinking
+      path_or_id: Qwen/Qwen3-VL-8B-Thinking
+      variants: 8B
+jina-vlm:
+  model_class: transformers.AutoModelForCausalLM
+  processor_class: transformers.AutoProcessor
+  tokenizer_class: transformers.AutoTokenizer
+  models:
+    - name: jina-vlm
+      path_or_id: jinaai/jina-vlm
+      variants: base

@@ -12,10 +12,12 @@ from functools import partial
 from PIL import Image, PngImagePlugin, ImageChops
 from time import perf_counter
 from pipeline_manager import PipelineManager
-from constants import (
-    SAMPLERS,
+from constants import SAMPLERS
+from config_loader import (
+    load_mode_config,
     load_vlm_model_table,
     load_vit_model_table,
+    filter_models,
 )
 from cap import build_caption_prompt, vl_generate
 from metadata import (
@@ -37,6 +39,12 @@ parser.add_argument(
     type=Path,
     default=Path("config/user_config.yaml"),
     help="Path to user configuration YAML",
+)
+parser.add_argument(
+    "--mode-config-yaml",
+    type=Path,
+    default=Path("config/mode_config.yaml"),
+    help="Path to mode configuration YAML",
 )
 parser.add_argument(
     "--opt-pol-yaml",
@@ -65,13 +73,21 @@ parser.add_argument(
     default=None,
     help="Server name or IP address for the Gradio server.",
 )
-parser.add_argument("--listen", action="store_true", help="Whether to listen on all interfaces")
+parser.add_argument(
+    "--listen", action="store_true", help="Whether to listen on all interfaces"
+)
 args = parser.parse_args()
 
 if not args.user_config_yaml.exists():
     raise FileNotFoundError(f"User config not found: {args.user_config_yaml}")
 with open(args.user_config_yaml, "r") as f:
     config = yaml.safe_load(f)
+if not args.mode_config_yaml.exists():
+    raise FileNotFoundError(f"Mode config not found: {args.mode_config_yaml}")
+mode_config = load_mode_config(args.mode_config_yaml)
+mode_list = list(mode_config.keys())
+print("Available modes:", mode_list)
+default_mode = config.get("default_mode", "Qwen Image")
 
 if not args.opt_pol_yaml.exists():
     raise FileNotFoundError(
@@ -88,6 +104,12 @@ vit_model_table = load_vit_model_table(args.vit_models_yaml)
 
 vlm_model_list = list(vlm_model_table.keys())
 vit_model_list = list(vit_model_table.keys())
+default_vlm_list = filter_models(
+    vlm_model_list,
+    vlm_model_table,
+    allowed_arch=mode_config[default_mode].get("allowed_vlm_arch", "All"),
+    allowed_variants=mode_config[default_mode].get("allowed_vlm_variants", "All"),
+)
 default_vlm = config.get("default_vlm_model", list(vlm_model_table.keys())[0])
 default_vit = config.get("default_vit_model", list(vit_model_table.keys())[0])
 
@@ -99,7 +121,7 @@ if args.listen or config.get("listen", False):
     server_name = "0.0.0.0"
 
 torch.backends.cuda.matmul.allow_tf32 = True
-pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table)
+pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table, mode_config)
 
 # ── helpers ───────────────────────────────────────────────────────────────
 EDIT_TRAIN_PIXELS = 1024 * 1024  # 1,048,576 px
@@ -163,15 +185,69 @@ def _extract_seed(meta):
     return gr.update()
 
 
+def _apply_mode(mode_name, vlm_model_list, vit_model_list):
+    cfg = mode_config.get(mode_name, {})
+    keep_tabs = cfg.get("keep_tabs", [])
+    allowed_vlm_arch = cfg.get("allowed_vlm_arch", "All")
+    allowed_vlm_variants = cfg.get("allowed_vlm_variants", "All")
+    allowed_vit_arch = cfg.get("allowed_vit_arch", "All")
+
+    # Tab visibility updates
+    t2i_tab_upd = gr.update(visible="t2i_tab" in keep_tabs)
+    i2i_tab_upd = gr.update(visible="i2i_tab" in keep_tabs)
+    inp_tab_upd = gr.update(visible="inpaint_tab" in keep_tabs)
+    vlm_tab_upd = gr.update(visible="vlm_tab" in keep_tabs)
+    png_tab_upd = gr.update(visible="png_info_tab" in keep_tabs)
+
+    new_vlm_list = filter_models(
+        vlm_model_list, vlm_model_table, allowed_vlm_arch, allowed_vlm_variants
+    )
+    if allowed_vit_arch is None:
+        new_vit_list = ["None"]
+        new_sampler_list = ["None"]
+    else:
+        new_vit_list = filter_models(
+            vit_model_list, vit_model_table, allowed_vit_arch, "All"
+        )
+        new_sampler_list = list(SAMPLERS.keys())
+
+    vlm_upd = gr.update(choices=new_vlm_list)
+    vit_upd = gr.update(choices=new_vit_list)
+    sampler_upd = gr.update(choices=new_sampler_list)
+
+    return (
+        t2i_tab_upd,
+        i2i_tab_upd,
+        inp_tab_upd,
+        vlm_tab_upd,
+        png_tab_upd,
+        vlm_upd,
+        vit_upd,
+        sampler_upd,
+    )
+
+
 def generate_t2i(
-    vlm, vit, prompt, negative, cfg, steps, width, height, bsz, bcnt, sampler, seed
+    arch_mode,
+    vlm,
+    vit,
+    prompt,
+    negative,
+    cfg,
+    steps,
+    width,
+    height,
+    bsz,
+    bcnt,
+    sampler,
+    seed,
 ):
     start_time = perf_counter()
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
 
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(vit, sampler, vlm_model_key=vlm, mode="t2i")
+    pipe = pm.get_pipeline(arch_mode, vit, sampler, vlm_model_key=vlm, pipe_mode="t2i")
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
@@ -229,6 +305,7 @@ def generate_t2i(
 
 
 def generate_i2i(
+    arch_mode,
     vlm,
     vit,
     input_image,
@@ -279,7 +356,7 @@ def generate_i2i(
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(vit, sampler, mode="i2i", vlm_model_key=vlm)
+    pipe = pm.get_pipeline(arch_mode, vit, sampler, pipe_mode="i2i", vlm_model_key=vlm)
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
@@ -374,6 +451,7 @@ def generate_i2i(
 
 
 def generate_inpaint(
+    arch_mode,
     vlm,
     vit,
     editor_val,
@@ -407,7 +485,9 @@ def generate_inpaint(
         mask_image = mask_image.resize((width, height), Image.Resampling.LANCZOS)
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
-    pipe = pm.get_pipeline(vit, sampler, mode="inpaint", vlm_model_key=vlm)
+    pipe = pm.get_pipeline(
+        arch_mode, vit, sampler, pipe_mode="inpaint", vlm_model_key=vlm
+    )
     gens = [
         torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
         for i in range(bsz * bcnt)
@@ -531,14 +611,20 @@ with gr.Blocks(
     fill_height=True,
 ) as demo:
     with gr.Row():
+        mode_dd = gr.Dropdown(
+            mode_list,
+            value=default_mode,
+            label="Mode",
+            scale=1,
+        )
         vit_dd = gr.Dropdown(
             vit_model_list,
             value=default_vit,
             label="ViT Model",
-            scale=6,
+            scale=5,
         )
         vlm_dd = gr.Dropdown(
-            vlm_model_list,
+            default_vlm_list,
             value=default_vlm,
             label="VLM Model",
             scale=1,
@@ -547,7 +633,7 @@ with gr.Blocks(
             list(SAMPLERS.keys()), value="FlowMatchEuler", label="Sampler"
         )
 
-    with gr.Tab("t2i"):
+    with gr.Tab("t2i") as t2i_tab:
         with gr.Row():
             with gr.Column(scale=7):
                 prompt_t2i = gr.Textbox(lines=4, label="Positive prompt")
@@ -678,6 +764,7 @@ with gr.Blocks(
         gen_btn_t2i.click(
             generate_t2i,
             inputs=[
+                mode_dd,
                 vlm_dd,
                 vit_dd,
                 prompt_t2i,
@@ -713,7 +800,7 @@ with gr.Blocks(
             outputs=[meta_view_t2i, sel_idx_t2i],
         )
 
-    with gr.Tab("i2i"):
+    with gr.Tab("i2i") as i2i_tab:
         with gr.Row():
             with gr.Column(scale=7):
                 prompt_i2i = gr.Textbox(lines=4, label="Positive prompt")
@@ -889,6 +976,7 @@ with gr.Blocks(
         gen_i2i_btn.click(
             generate_i2i,
             inputs=[
+                mode_dd,
                 vlm_dd,
                 vit_dd,
                 init_img_i2i,
@@ -936,7 +1024,7 @@ with gr.Blocks(
             outputs=[meta_view_i2i, sel_idx_i2i],
         )
 
-    with gr.Tab("inpaint"):
+    with gr.Tab("inpaint") as inp_tab:
         with gr.Row():
             with gr.Column(scale=7):
                 prompt_inp = gr.Textbox(lines=4, label="Positive prompt")
@@ -1114,6 +1202,7 @@ with gr.Blocks(
         gen_inp_btn.click(
             generate_inpaint,
             inputs=[
+                mode_dd,
                 vlm_dd,
                 vit_dd,
                 img_mask_inp,
@@ -1157,7 +1246,7 @@ with gr.Blocks(
         outputs=[meta_view_inp, sel_idx_inp],
     )
 
-    with gr.Tab("vlm"):
+    with gr.Tab("vlm") as vlm_tab:
         with gr.Tabs():
             with gr.TabItem("caption"):
                 with gr.Row():
@@ -1199,9 +1288,19 @@ with gr.Blocks(
                             value=build_caption_prompt("default", None),
                         )
                         with gr.Row(equal_height=True):
-                            cap_btn = gr.Button("Generate Caption", variant="primary")
+                            with gr.Column():
+                                max_tkn_cap = gr.Slider(
+                                    128,
+                                    8192,
+                                    value=1024,
+                                    step=128,
+                                    label="Max tokens",
+                                )
+                                cap_btn = gr.Button(
+                                    "Generate Caption", variant="primary"
+                                )
                             progress_cap = gr.Textbox(
-                                "", label="Status", interactive=False, lines=1
+                                "", label="Status", interactive=False, lines=2
                             )
                         cap_out = gr.Textbox(
                             label="Caption", lines=4, show_copy_button=True
@@ -1226,7 +1325,7 @@ with gr.Blocks(
                 )
                 cap_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[img_cap, prompt_cap, vlm_dd],
+                    inputs=[mode_dd, img_cap, prompt_cap, vlm_dd, max_tkn_cap],
                     outputs=[cap_out, progress_cap],
                     api_name="vlm_caption",
                     show_progress_on=progress_cap,
@@ -1251,9 +1350,17 @@ with gr.Blocks(
                             label="Question", lines=2, show_copy_button=True
                         )
                         with gr.Row(equal_height=True):
-                            ask_btn = gr.Button("Ask", variant="primary")
+                            with gr.Column():
+                                max_tkn_vqa = gr.Slider(
+                                    128,
+                                    8192,
+                                    value=1024,
+                                    step=128,
+                                    label="Max tokens",
+                                )
+                                ask_btn = gr.Button("Ask", variant="primary")
                             progress_vqa = gr.Textbox(
-                                "", label="Status", interactive=False, lines=1
+                                "", label="Status", interactive=False, lines=2
                             )
                         ans_out = gr.Textbox(
                             label="Answer", lines=4, show_copy_button=True
@@ -1267,14 +1374,14 @@ with gr.Blocks(
                 )
                 ask_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[img_vqa, q_box, vlm_dd],
+                    inputs=[mode_dd, img_vqa, q_box, vlm_dd, max_tkn_vqa],
                     outputs=[ans_out, progress_vqa],
                     api_name="vlm_VQA",
                     show_progress_on=progress_vqa,
                     concurrency_id="gpu",
                 )
 
-    with gr.Tab("png info"):
+    with gr.Tab("png info") as png_tab:
         with gr.Row():
             png_in = gr.Image(type="filepath", label="PNG")
             with gr.Column():
@@ -1303,6 +1410,16 @@ with gr.Blocks(
                 )
 
     png_in.change(extract_meta, png_in, [meta_text, meta_json])
+
+    mode_dd.select(
+        partial(
+            _apply_mode,
+            vlm_model_list=vlm_model_list,
+            vit_model_list=vit_model_list,
+        ),
+        mode_dd,
+        [t2i_tab, i2i_tab, inp_tab, vlm_tab, png_tab, vlm_dd, vit_dd, sampler],
+    )
 
     # send buttons
 

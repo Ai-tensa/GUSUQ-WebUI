@@ -1,0 +1,7 @@
+Qwen Image:
+  keep_tabs: [t2i_tab, i2i_tab, inpaint_tab, vlm_tab, png_info_tab]
+  allowed_vlm_arch: Qwen2.5-VL
+  allowed_vlm_variants: [7B]
+VLM Only:
+  keep_tabs: [vlm_tab, png_info_tab]
+  allowed_vit_arch: null

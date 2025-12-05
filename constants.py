@@ -1,8 +1,5 @@
-from typing import Any
 import math
 from diffusers import FlowMatchEulerDiscreteScheduler
-from pathlib import Path
-import yaml
 
 SAMPLERS = {
     "FlowMatchEuler": FlowMatchEulerDiscreteScheduler,  # FlowMatch Euler is only supported sampler for Qwen-Image at the moment
@@ -30,29 +27,3 @@ FLOWMATCH_CFG = {
 
 BASE_QWEN_IMAGE_ID = "Qwen/Qwen-Image"
 BASE_QWEN_IMAGE_EDIT_ID = "Qwen/Qwen-Image-Edit-2509"
-
-
-def load_vlm_model_table(yaml_path: Path) -> dict[str, dict[str, Any]]:
-    with open(yaml_path, "r") as f:
-        raw = yaml.safe_load(f) or []
-    table = {}
-    for item in raw:
-        name = item["name"]
-        table[name] = {
-            "id": item["path_or_id"],
-            "dtype": item.get("dtype", "bfloat16"),
-        }
-    return table
-
-
-def load_vit_model_table(yaml_path: Path) -> dict[str, dict[str, Any]]:
-    with open(yaml_path, "r") as f:
-        raw = yaml.safe_load(f) or []
-    table = {}
-    for item in raw:
-        name = item["name"]
-        table[name] = {
-            "path": item["path_or_url"],
-            "edit": bool(item.get("edit", False)),
-        }
-    return table

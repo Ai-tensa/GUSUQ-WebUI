@@ -4,14 +4,14 @@ from time import perf_counter
 from pipeline_manager import PipelineManager
 from utils import release_memory_resources
 
-def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str, vlm_model_key: str = None,
-                 max_new_tokens: int = 1024, temperature: float = 0.7) -> str:
+def vl_generate(pm: PipelineManager, mode: str, image: Image.Image, prompt: str,
+                 vlm_model_key: str = None, max_new_tokens: int = 1024, temperature: float = 0.7) -> str:
     start_time = perf_counter()
     msgs = [{"role": "user",
              "content": [{"type": "image", "image": image},
                          {"type": "text", "text": prompt}]}]
     opt_policy = pm.opt_pol_cfg.get("opt_policy", None)
-    pm.get_vlm(vlm_model_key)
+    pm.get_vlm(mode, vlm_model_key)
     proc = pm.vision_processor
     tokenizer = pm.tokenizer
     inputs = proc.apply_chat_template(
@@ -19,10 +19,15 @@ def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str, vlm_model_
         tokenize=True, return_dict=True,
         return_tensors="pt")
 
+    device = "cuda"
     if opt_policy == "high_vram":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         inputs = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
         pm.text_encoder.to(device, non_blocking=True)
+
+    elif opt_policy == "mid_vram" or opt_policy == "low_vram":
+        inputs = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
+        if not pm.is_set_te_offload:
+            pm.text_encoder.to(device, non_blocking=True)
 
     with torch.no_grad():
         outs = pm.text_encoder.generate(
@@ -30,7 +35,9 @@ def vl_generate(pm: PipelineManager, image: Image.Image, prompt: str, vlm_model_
             temperature=temperature)
     gen_ids = outs[:, inputs["input_ids"].shape[1]:]
     if opt_policy == "high_vram":
-        pm.text_encoder.to("cpu", non_blocking=True)
+        pm.text_encoder.to("cpu")
+    elif not pm.is_set_te_offload and (opt_policy == "mid_vram" or opt_policy == "low_vram"):
+        pm.text_encoder.to("cpu")
 
     release_memory_resources()
     elapsed = perf_counter() - start_time
