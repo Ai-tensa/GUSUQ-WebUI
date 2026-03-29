@@ -27,7 +27,7 @@ from diffusers.utils import is_torch_xla_available, logging, replace_example_doc
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from .pipeline_output import QwenImagePipelineOutput
-from .utils import retrieve_latents, calculate_shift, retrieve_timesteps, calculate_dimensions
+from .utils import retrieve_latents, calculate_shift, retrieve_timesteps, calculate_dimensions, get_transformer_text_seq_kwargs
 
 
 if is_torch_xla_available():
@@ -693,9 +693,9 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
         if self.attention_kwargs is None:
             self._attention_kwargs = {}
 
-        txt_seq_lens = prompt_embeds_mask.sum(dim=1).tolist() if prompt_embeds_mask is not None else None
-        negative_txt_seq_lens = (
-            negative_prompt_embeds_mask.sum(dim=1).tolist() if negative_prompt_embeds_mask is not None else None
+        cond_text_seq_kwargs = get_transformer_text_seq_kwargs(self.transformer, prompt_embeds)
+        uncond_text_seq_kwargs = (
+            get_transformer_text_seq_kwargs(self.transformer, negative_prompt_embeds) if do_true_cfg else {}
         )
 
         # 6. Denoising loop
@@ -721,7 +721,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                         encoder_hidden_states_mask=prompt_embeds_mask,
                         encoder_hidden_states=prompt_embeds,
                         img_shapes=img_shapes,
-                        txt_seq_lens=txt_seq_lens,
+                        **cond_text_seq_kwargs,
                         attention_kwargs=self.attention_kwargs,
                         return_dict=False,
                     )[0]
@@ -736,7 +736,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                             encoder_hidden_states_mask=negative_prompt_embeds_mask,
                             encoder_hidden_states=negative_prompt_embeds,
                             img_shapes=img_shapes,
-                            txt_seq_lens=negative_txt_seq_lens,
+                            **uncond_text_seq_kwargs,
                             attention_kwargs=self.attention_kwargs,
                             return_dict=False,
                         )[0]

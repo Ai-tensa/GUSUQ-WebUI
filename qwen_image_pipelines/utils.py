@@ -5,6 +5,24 @@ from typing import List, Optional, Union
 import math
 import torch
 
+
+def get_transformer_text_seq_kwargs(transformer, encoder_hidden_states: torch.Tensor) -> dict:
+    text_seq_len = int(encoder_hidden_states.shape[1])
+    batch_size = int(encoder_hidden_states.shape[0])
+
+    try:
+        forward_params = inspect.signature(transformer.forward).parameters
+    except (TypeError, ValueError):
+        return {"txt_seq_lens": [text_seq_len] * batch_size}
+
+    if "max_txt_seq_len" in forward_params:
+        return {"max_txt_seq_len": text_seq_len}
+
+    if "txt_seq_lens" in forward_params:
+        return {"txt_seq_lens": [text_seq_len] * batch_size}
+
+    return {}
+
 # Copied from diffusers.pipelines.qwenimage.pipeline_qwenimage.calculate_shift
 def calculate_shift(
     image_seq_len,
