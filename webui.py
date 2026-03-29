@@ -9,12 +9,16 @@ from pathlib import Path
 import json
 import yaml
 from functools import partial
+from huggingface_hub import hf_hub_download
 from PIL import Image, PngImagePlugin, ImageChops
 from time import perf_counter
 from pipeline_manager import PipelineManager
 from constants import SAMPLERS
+from constants import SAME_AS_IMAGE_GENERATION_PIPELINE
 from config_loader import (
-    load_mode_config,
+    ensure_yaml_from_sample,
+    load_base_pipeline_table,
+    load_yaml_config,
     load_vlm_model_table,
     load_vit_model_table,
     filter_models,
@@ -65,6 +69,18 @@ parser.add_argument(
     help="Path to ViT models YAML",
 )
 parser.add_argument(
+    "--base-pipelines-yaml",
+    type=Path,
+    default=Path("config/base_pipelines.yaml"),
+    help="Path to base pipeline config YAML",
+)
+parser.add_argument(
+    "--adapters-yaml",
+    type=Path,
+    default=Path("config/adapters.yaml"),
+    help="Path to adapters YAML",
+)
+parser.add_argument(
     "--port", type=int, default=None, help="Port number for the Gradio server"
 )
 parser.add_argument(
@@ -78,40 +94,189 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-if not args.user_config_yaml.exists():
-    raise FileNotFoundError(f"User config not found: {args.user_config_yaml}")
+CONFIG_DIR = Path("config")
+
+
+def _supports_fp4_vit_models() -> bool:
+    """Detect whether the primary visible CUDA device should use FP4/NVFP4 ViT samples."""
+    if not torch.cuda.is_available():
+        return False
+
+    try:
+        capability = torch.cuda.get_device_capability(torch.cuda.current_device())
+    except Exception:
+        return False
+
+    # NVIDIA's current support matrices show FP4 support on compute capability
+    # 10.0, 11.0, and 12.0, so using the FP4 sample for 10.x-and-later devices
+    # keeps future architectures on the FP4 path as well.
+    return capability >= (10, 0)
+
+
+def _ensure_config_inputs() -> None:
+    ensure_yaml_from_sample(
+        args.user_config_yaml,
+        CONFIG_DIR / "user_config_sample.yaml",
+        "user",
+    )
+    ensure_yaml_from_sample(
+        args.mode_config_yaml,
+        CONFIG_DIR / "mode_config_sample.yaml",
+        "mode",
+    )
+    ensure_yaml_from_sample(
+        args.opt_pol_yaml,
+        CONFIG_DIR / "opt_pol_sample.yaml",
+        "optimization policy",
+    )
+    ensure_yaml_from_sample(
+        args.vlm_models_yaml,
+        CONFIG_DIR / "vlm_models_sample.yaml",
+        "VLM models",
+    )
+    vit_sample = (
+        CONFIG_DIR / "vit_models_sample_50xx.yaml"
+        if _supports_fp4_vit_models()
+        else CONFIG_DIR / "vit_models_sample_old.yaml"
+    )
+    ensure_yaml_from_sample(args.vit_models_yaml, vit_sample, "ViT models")
+    ensure_yaml_from_sample(
+        args.base_pipelines_yaml,
+        CONFIG_DIR / "base_pipelines_sample.yaml",
+        "base pipeline",
+    )
+    ensure_yaml_from_sample(
+        args.adapters_yaml,
+        CONFIG_DIR / "adapters_sample.yaml",
+        "adapters",
+    )
+
+
+_ensure_config_inputs()
+
 with open(args.user_config_yaml, "r") as f:
     config = yaml.safe_load(f)
-if not args.mode_config_yaml.exists():
-    raise FileNotFoundError(f"Mode config not found: {args.mode_config_yaml}")
-mode_config = load_mode_config(args.mode_config_yaml)
+mode_config = load_yaml_config(args.mode_config_yaml)
 mode_list = list(mode_config.keys())
-print("Available modes:", mode_list)
-default_mode = config.get("default_mode", "Qwen Image")
+if not mode_list:
+    raise RuntimeError("mode_config must define at least one mode.")
+default_mode = config.get("default_mode", mode_list[0])
+default_enable_adapters = mode_config.get(default_mode, {}).get("enable_adapters", [])
+default_enable_lora = "LoRA" in default_enable_adapters
 
-if not args.opt_pol_yaml.exists():
-    raise FileNotFoundError(
-        f"Optimization policy config not found: {args.opt_pol_yaml}"
-    )
 with open(args.opt_pol_yaml, "r") as f:
     opt_pol_cfg = yaml.safe_load(f)
-if not args.vlm_models_yaml.exists():
-    raise FileNotFoundError(f"VLM models config not found: {args.vlm_models_yaml}")
 vlm_model_table = load_vlm_model_table(args.vlm_models_yaml)
-if not args.vit_models_yaml.exists():
-    raise FileNotFoundError(f"ViT models config not found: {args.vit_models_yaml}")
 vit_model_table = load_vit_model_table(args.vit_models_yaml)
+base_pipeline_table = load_base_pipeline_table(args.base_pipelines_yaml)
 
-vlm_model_list = list(vlm_model_table.keys())
 vit_model_list = list(vit_model_table.keys())
-default_vlm_list = filter_models(
-    vlm_model_list,
-    vlm_model_table,
-    allowed_arch=mode_config[default_mode].get("allowed_vlm_arch", "All"),
-    allowed_variants=mode_config[default_mode].get("allowed_vlm_variants", "All"),
-)
-default_vlm = config.get("default_vlm_model", list(vlm_model_table.keys())[0])
-default_vit = config.get("default_vit_model", list(vit_model_table.keys())[0])
+
+
+def _get_base_pipeline_choices(mode_name: str) -> list[str]:
+    cfg = mode_config.get(mode_name, {})
+    allowed_base_arch = cfg.get("allowed_base_arch", "All")
+    if allowed_base_arch is not None:
+        base_pipelines = filter_models(base_pipeline_table, allowed_base_arch, "All")
+        if base_pipelines:
+            return base_pipelines
+    return ["None"] if not cfg.get("image_generation", True) else ["Default"]
+
+
+def _get_vit_choices(mode_name: str) -> list[str]:
+    cfg = mode_config.get(mode_name, {})
+    allowed_vit_arch = cfg.get("allowed_vit_arch", "All")
+    if allowed_vit_arch is None:
+        return [SAME_AS_IMAGE_GENERATION_PIPELINE] if cfg.get("image_generation", True) else ["None"]
+    vit_choices = filter_models(vit_model_table, allowed_vit_arch, "All")
+    if cfg.get("allow_same_as_image_generation_pipeline", False):
+        return [SAME_AS_IMAGE_GENERATION_PIPELINE] + vit_choices
+    return vit_choices
+
+
+def _get_vlm_choices(mode_name: str) -> list[str]:
+    cfg = mode_config.get(mode_name, {})
+    return filter_models(
+        vlm_model_table,
+        allowed_arch=cfg.get("allowed_vlm_arch", "All"),
+        allowed_variants=cfg.get("allowed_vlm_variants", "All"),
+    )
+
+
+def _get_sampler_choices(mode_name: str) -> list[str]:
+    cfg = mode_config.get(mode_name, {})
+    return ["None"] if not cfg.get("image_generation", True) else list(SAMPLERS.keys())
+
+
+base_pipeline_list = _get_base_pipeline_choices(default_mode)
+vit_model_list = _get_vit_choices(default_mode)
+vlm_model_list = _get_vlm_choices(default_mode)
+sampler_list = _get_sampler_choices(default_mode)
+
+default_base_pipeline = config.get("default_base_pipeline", base_pipeline_list[0])
+if default_base_pipeline not in base_pipeline_list:
+    default_base_pipeline = base_pipeline_list[0]
+
+default_vlm = config.get("default_vlm_model", vlm_model_list[0])
+if default_vlm not in vlm_model_list:
+    default_vlm = vlm_model_list[0]
+
+default_vit = config.get("default_vit_model", vit_model_list[0])
+if default_vit not in vit_model_list:
+    default_vit = vit_model_list[0]
+
+default_sampler = config.get("default_sampler", sampler_list[0])
+if default_sampler not in sampler_list:
+    default_sampler = sampler_list[0]
+
+adapters_config = load_yaml_config(args.adapters_yaml)
+
+
+def _adapter_mode_keys(mode_name: str) -> list[str]:
+    keys = [mode_name]
+    if " " in mode_name:
+        keys.append(mode_name.replace(" ", "-"))
+    if "-" in mode_name:
+        keys.append(mode_name.replace("-", " "))
+    seen = set()
+    ordered = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return ordered
+
+
+def _get_adapter_table(mode_name: str) -> dict:
+    for key in _adapter_mode_keys(mode_name):
+        table = adapters_config.get(key)
+        if isinstance(table, dict):
+            return table
+    return {}
+
+
+def _reload_lora_list(mode_name: str, lora_t2i: str, lora_i2i: str, lora_inp: str):
+    global adapters_config
+
+    try:
+        adapters_config = load_yaml_config(args.adapters_yaml)
+    except Exception as e:
+        raise gr.Error(f"Failed to reload adapters config: {e}")
+
+    cfg = mode_config.get(mode_name, {})
+    enable_lora = "LoRA" in cfg.get("enable_adapters", [])
+    lora_list = list(_get_adapter_table(mode_name).get("LoRA", {}).keys()) if enable_lora else []
+
+    def _upd(current_name: str):
+        value = current_name if current_name in lora_list else (lora_list[0] if lora_list else None)
+        return gr.update(choices=lora_list, value=value)
+
+    return _upd(lora_t2i), _upd(lora_i2i), _upd(lora_inp)
+
+
+default_adapter_table = _get_adapter_table(default_mode)
+default_lora_table = default_adapter_table.get("LoRA", {}) if default_enable_lora else {}
+default_lora_list = list(default_lora_table.keys()) if default_enable_lora else []
 
 BASE_OUTPUT_DIR = Path(config.get("output_dir", "outputs"))
 
@@ -121,7 +286,13 @@ if args.listen or config.get("listen", False):
     server_name = "0.0.0.0"
 
 torch.backends.cuda.matmul.allow_tf32 = True
-pm = PipelineManager(opt_pol_cfg, vlm_model_table, vit_model_table, mode_config)
+pm = PipelineManager(
+    opt_pol_cfg,
+    vlm_model_table,
+    vit_model_table,
+    base_pipeline_table,
+    mode_config,
+)
 
 # ── helpers ───────────────────────────────────────────────────────────────
 EDIT_TRAIN_PIXELS = 1024 * 1024  # 1,048,576 px
@@ -185,12 +356,13 @@ def _extract_seed(meta):
     return gr.update()
 
 
-def _apply_mode(mode_name, vlm_model_list, vit_model_list):
+def _apply_mode(mode_name, base_pipe_dd, vlm_dd, vit_dd, sampler, lora_t2i, lora_i2i, lora_inp):
     cfg = mode_config.get(mode_name, {})
+    adapter_table = _get_adapter_table(mode_name)
     keep_tabs = cfg.get("keep_tabs", [])
-    allowed_vlm_arch = cfg.get("allowed_vlm_arch", "All")
-    allowed_vlm_variants = cfg.get("allowed_vlm_variants", "All")
-    allowed_vit_arch = cfg.get("allowed_vit_arch", "All")
+    enable_adapters = cfg.get("enable_adapters", [])
+    enable_lora = "LoRA" in enable_adapters
+    lora_list = list(adapter_table.get("LoRA", {}).keys()) if enable_lora else []
 
     # Tab visibility updates
     t2i_tab_upd = gr.update(visible="t2i_tab" in keep_tabs)
@@ -198,41 +370,278 @@ def _apply_mode(mode_name, vlm_model_list, vit_model_list):
     inp_tab_upd = gr.update(visible="inpaint_tab" in keep_tabs)
     vlm_tab_upd = gr.update(visible="vlm_tab" in keep_tabs)
     png_tab_upd = gr.update(visible="png_info_tab" in keep_tabs)
-
-    new_vlm_list = filter_models(
-        vlm_model_list, vlm_model_table, allowed_vlm_arch, allowed_vlm_variants
-    )
-    if allowed_vit_arch is None:
-        new_vit_list = ["None"]
-        new_sampler_list = ["None"]
-    else:
-        new_vit_list = filter_models(
-            vit_model_list, vit_model_table, allowed_vit_arch, "All"
-        )
-        new_sampler_list = list(SAMPLERS.keys())
-
-    vlm_upd = gr.update(choices=new_vlm_list)
-    vit_upd = gr.update(choices=new_vit_list)
-    sampler_upd = gr.update(choices=new_sampler_list)
-
-    return (
+    tab_upds = [
         t2i_tab_upd,
         i2i_tab_upd,
         inp_tab_upd,
         vlm_tab_upd,
         png_tab_upd,
-        vlm_upd,
-        vit_upd,
-        sampler_upd,
+    ]
+
+    # Meta accordion updates
+    meta_acc_t2i_upd = gr.update(visible=enable_lora)
+    meta_acc_i2i_upd = gr.update(visible=enable_lora)
+    meta_acc_inp_upd = gr.update(visible=enable_lora)
+    meta_acc_upds = [meta_acc_t2i_upd, meta_acc_i2i_upd, meta_acc_inp_upd]
+
+    # Dropdown updates
+    new_base_pipeline_list = _get_base_pipeline_choices(mode_name)
+    new_vlm_list = _get_vlm_choices(mode_name)
+    new_vit_list = _get_vit_choices(mode_name)
+    new_sampler_list = _get_sampler_choices(mode_name)
+
+    new_base_pipeline = (
+        base_pipe_dd
+        if base_pipe_dd in new_base_pipeline_list
+        else new_base_pipeline_list[0]
     )
+    new_vlm = vlm_dd if vlm_dd in new_vlm_list else new_vlm_list[0]
+    new_vit = vit_dd if vit_dd in new_vit_list else new_vit_list[0]
+    new_sampler = sampler if sampler in new_sampler_list else new_sampler_list[0]
+    base_pipe_upd = gr.update(
+        choices=new_base_pipeline_list,
+        value=new_base_pipeline,
+        interactive=cfg.get("image_generation", True),
+    )
+    vlm_upd = gr.update(choices=new_vlm_list, value=new_vlm)
+    vit_upd = gr.update(choices=new_vit_list, value=new_vit)
+    sampler_upd = gr.update(choices=new_sampler_list, value=new_sampler)
+    dd_upds = [base_pipe_upd, vlm_upd, vit_upd, sampler_upd]
+
+    # LoRA name dropdown updates
+    def _lora_upd(current_name: str):
+        value = current_name if current_name in lora_list else (lora_list[0] if lora_list else None)
+        return gr.update(choices=lora_list, value=value)
+
+    lora_name_t2i_upd = _lora_upd(lora_t2i)
+    lora_name_i2i_upd = _lora_upd(lora_i2i)
+    lora_name_inp_upd = _lora_upd(lora_inp)
+    lora_upds = [lora_name_t2i_upd, lora_name_i2i_upd, lora_name_inp_upd]
+
+    return tab_upds + dd_upds + meta_acc_upds + lora_upds
+
+
+def _is_edit_model_for_mode(arch_mode: str, vit: str, base_model: str) -> bool:
+    if vit == SAME_AS_IMAGE_GENERATION_PIPELINE:
+        return bool(base_pipeline_table.get(base_model, {}).get("edit", False))
+    adapter = pm.get_mode_adapter(arch_mode)
+    return bool(adapter.is_edit_model(vit_model_table, vit))
+
+
+def _base_generation_params(
+    arch_mode,
+    prompt,
+    negative,
+    cfg,
+    steps,
+    width,
+    height,
+    bsz,
+    gen_list,
+):
+    adapter = pm.get_mode_adapter(arch_mode)
+    cfg_key = adapter.cfg_param_key
+    return {
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "num_inference_steps": steps,
+        "width": width,
+        "height": height,
+        "num_images_per_prompt": bsz,
+        "generator": gen_list,
+        cfg_key: cfg,
+    }
+
+def _parse_meta_prompt(meta_prompt: str) -> dict:
+    raw = (meta_prompt or "").strip()
+    if not raw:
+        return {}
+
+    try:
+        obj = yaml.safe_load(raw)
+    except Exception:
+        raise gr.Error("Meta prompt must be valid YAML.")
+
+    if not isinstance(obj, dict):
+        raise gr.Error("Meta prompt must be a YAML mapping.")
+
+    loras = obj.get("LoRA")
+    if loras is not None and not isinstance(loras, dict):
+        raise gr.Error("Meta prompt: LoRA must be a mapping of name: strength.")
+
+    return obj
+
+
+def _add_lora_to_meta(meta_prompt: str, lora_name: str, strength: float) -> str:
+    if not lora_name:
+        return meta_prompt or ""
+
+    obj = _parse_meta_prompt(meta_prompt)
+    obj.setdefault("LoRA", {})
+    obj["LoRA"][lora_name] = strength
+    return yaml.safe_dump(obj, sort_keys=False, allow_unicode=True)
+
+
+def _is_nunchaku_lora_backend(pipe) -> bool:
+    transformer = getattr(pipe, "transformer", None)
+    return all(
+        hasattr(transformer, method)
+        for method in ("update_lora_params", "set_lora_strength", "reset_lora")
+    )
+
+
+def _resolve_nunchaku_lora_source(params: dict):
+    src = params.get("pretrained_model_name_or_path_or_dict")
+    if isinstance(src, dict):
+        return src
+    if not isinstance(src, str) or not src:
+        raise gr.Error("Nunchaku LoRA requires a valid path or state dict.")
+
+    if Path(src).exists():
+        return src
+
+    weight_name = params.get("weight_name")
+    if weight_name:
+        return hf_hub_download(repo_id=src, filename=weight_name)
+
+    raise gr.Error(
+        "Nunchaku LoRA requires a local safetensors path, or a Hugging Face repo plus weight_name."
+    )
+
+
+def _apply_nunchaku_loras(pipe, lora_params: dict):
+    transformer = pipe.transformer
+    requested_signature = tuple(
+        sorted((name, float(params["strength"])) for name, params in lora_params.items())
+    )
+    current_signature = getattr(transformer, "_gusuq_nunchaku_lora_signature", ())
+
+    if not lora_params:
+        if current_signature:
+            transformer.reset_lora()
+            transformer._gusuq_nunchaku_lora_signature = ()
+        return
+
+    if current_signature == requested_signature:
+        return
+
+    if current_signature:
+        transformer.reset_lora()
+        transformer._gusuq_nunchaku_lora_signature = ()
+
+    sources = []
+    strengths = []
+    for params in lora_params.values():
+        sources.append(_resolve_nunchaku_lora_source(params))
+        strengths.append(float(params["strength"]))
+
+    transformer.update_lora_params(sources, strengths)
+    transformer._gusuq_nunchaku_lora_signature = requested_signature
+
+
+def _apply_diffusers_loras(pipe, lora_params: dict):
+    requested_signature = tuple(
+        sorted((name, float(params["strength"])) for name, params in lora_params.items())
+    )
+    current_signature = getattr(pipe, "_gusuq_diffusers_lora_signature", ())
+    loaded_names = pipe.get_list_adapters().get("transformer", [])
+
+    if not lora_params:
+        if loaded_names or current_signature:
+            pipe.unload_lora_weights()
+            pipe._gusuq_diffusers_lora_signature = ()
+        return
+
+    if current_signature == requested_signature:
+        return
+
+    if loaded_names or current_signature:
+        pipe.unload_lora_weights()
+        pipe._gusuq_diffusers_lora_signature = ()
+
+    adapter_names = []
+    adapter_weights = []
+    for name, params in lora_params.items():
+        load_params = dict(params)
+        adapter_name = load_params.pop("adapter_name")
+        adapter_names.append(adapter_name)
+        adapter_weights.append(float(load_params.pop("strength")))
+        load_params["adapter_name"] = adapter_name
+        pipe.load_lora_weights(**load_params)
+
+    pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+    pipe._gusuq_diffusers_lora_signature = requested_signature
+
+
+def _apply_requested_loras(pipe, arch_mode: str, meta_prompt: str):
+    enable_adapters = mode_config.get(arch_mode, {}).get("enable_adapters", [])
+    if not enable_adapters:
+        if _is_nunchaku_lora_backend(pipe):
+            _apply_nunchaku_loras(pipe, {})
+        elif hasattr(pipe, "unload_lora_weights"):
+            _apply_diffusers_loras(pipe, {})
+        return
+
+    adapters_requests = _parse_meta_prompt(meta_prompt)
+    lora_requests = adapters_requests.get("LoRA", {}) if "LoRA" in enable_adapters else {}
+    lora_table = _get_adapter_table(arch_mode).get("LoRA", {})
+    lora_params = {}
+    for name, strength in lora_requests.items():
+        if name not in lora_table:
+            raise gr.Error(f"LoRA '{name}' not found for mode '{arch_mode}'.")
+        params = dict(lora_table[name])
+        params["adapter_name"] = name
+        params["strength"] = float(strength)
+        lora_params[name] = params
+
+    if _is_nunchaku_lora_backend(pipe):
+        _apply_nunchaku_loras(pipe, lora_params)
+    else:
+        _apply_diffusers_loras(pipe, lora_params)
+
+
+def _build_params(
+    arch_mode,
+    gen_mode,
+    prompt,
+    negative,
+    cfg,
+    steps,
+    width,
+    height,
+    bsz,
+    gen_list,
+    **extra,
+):
+    base_params = _base_generation_params(
+        arch_mode,
+        prompt,
+        negative,
+        cfg,
+        steps,
+        width,
+        height,
+        bsz,
+        gen_list,
+    )
+    adapter = pm.get_mode_adapter(arch_mode)
+    return adapter.build_params(gen_mode, base_params, extra)
+
+
+def _generator_device_for(pipe):
+    if pm.opt_pol_cfg.get("opt_policy") == "low_vram":
+        return pipe._execution_device
+    return pipe.transformer.device
 
 
 def generate_t2i(
     arch_mode,
+    base_model,
     vlm,
     vit,
     prompt,
     negative,
+    meta_prompt,
     cfg,
     steps,
     width,
@@ -247,10 +656,17 @@ def generate_t2i(
     negative = negative if negative.strip() != "" else None
 
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(arch_mode, vit, sampler, vlm_model_key=vlm, pipe_mode="t2i")
+    pipe = pm.get_pipeline(
+        arch_mode,
+        vit,
+        sampler,
+        vlm_model_key=vlm,
+        pipe_mode="t2i",
+        base_model_key=base_model,
+    )
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
-        torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
+        torch.Generator(device=_generator_device_for(pipe)).manual_seed(base_seed + i)
         for i in range(bsz * bcnt)
     ]
 
@@ -264,17 +680,22 @@ def generate_t2i(
         out_dir = out_dir / date_str
     out_dir.mkdir(exist_ok=True, parents=True)
     images, meta_list = [], []
+    _apply_requested_loras(pipe, arch_mode, meta_prompt)
+
     for i in tqdm(range(bcnt), desc="Batches"):
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative,
-            true_cfg_scale=cfg,
-            num_inference_steps=steps,
-            width=width,
-            height=height,
-            num_images_per_prompt=bsz,
-            generator=gens[i * bsz : (i + 1) * bsz],
-        ).images
+        params = _build_params(
+            arch_mode,
+            "t2i",
+            prompt,
+            negative,
+            cfg,
+            steps,
+            width,
+            height,
+            bsz,
+            gens[i * bsz : (i + 1) * bsz],
+        )
+        result = pipe(**params).images
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         for j, img in enumerate(result):
             s = base_seed + i * bsz + j
@@ -283,6 +704,7 @@ def generate_t2i(
                 model=vit,
                 prompt=prompt,
                 negative=negative,
+                meta_prompt=meta_prompt,
                 sampler=sampler,
                 steps=steps,
                 cfg=cfg,
@@ -306,6 +728,7 @@ def generate_t2i(
 
 def generate_i2i(
     arch_mode,
+    base_model,
     vlm,
     vit,
     input_image,
@@ -317,6 +740,7 @@ def generate_i2i(
     ref_image3,
     prompt,
     negative,
+    meta_prompt,
     cfg,
     resize_before_i2i,
     strength,
@@ -330,36 +754,37 @@ def generate_i2i(
     consistency_strength,
 ):
     start_time = perf_counter()
-    is_edit_model = vit_model_table[vit]["edit"]
-
-    # Validation and adjustments
-    if is_edit_model:
-        if strength != 1.0:
-            gr.Info("Strength is not used for Edit models. Ignoring it.")
-        if not resize_before_i2i and consistency_strength != 0.0:
-            gr.Info(
-                "For consistency strength, input image must be resized. Setting consistency strength to 0.0."
-            )
-            consistency_strength = 0.0
-    else:
-        if not resize_before_i2i:
-            gr.Info("Normal i2i models always resize input. Strength is set to 1.0.")
-            resize_before_i2i = True
-            strength = 1.0
-        if consistency_strength != 0.0:
-            gr.Info(
-                "Consistency strength is only supported for Edit models. Ignoring it."
-            )
-    if resize_before_i2i and is_edit_model:  # Normal i2i models resize in their pipe
-        input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
+    adapter = pm.get_mode_adapter(arch_mode)
+    is_edit_model = _is_edit_model_for_mode(arch_mode, vit, base_model)
+    prepared = adapter.prepare_i2i_inputs(
+        input_image=input_image,
+        width=width,
+        height=height,
+        resize_before_i2i=resize_before_i2i,
+        strength=strength,
+        consistency_strength=consistency_strength,
+        is_edit_model=is_edit_model,
+        notify=gr.Info,
+    )
+    input_image = prepared["input_image"]
+    resize_before_i2i = prepared["resize_before_i2i"]
+    strength = prepared["strength"]
+    consistency_strength = prepared["consistency_strength"]
 
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     print("RSS before get pipe:", rss_mb(), "MB")
-    pipe = pm.get_pipeline(arch_mode, vit, sampler, pipe_mode="i2i", vlm_model_key=vlm)
+    pipe = pm.get_pipeline(
+        arch_mode,
+        vit,
+        sampler,
+        pipe_mode="i2i",
+        vlm_model_key=vlm,
+        base_model_key=base_model,
+    )
     print("RSS after get pipe :", rss_mb(), "MB")
     gens = [
-        torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
+        torch.Generator(device=_generator_device_for(pipe)).manual_seed(base_seed + i)
         for i in range(bsz * bcnt)
     ]
     out_dir = (
@@ -384,34 +809,25 @@ def generate_i2i(
         )
     input_images = [input_image] + refs if is_edit_model else input_image
     images, meta_list = [], []
+    _apply_requested_loras(pipe, arch_mode, meta_prompt)
     for i in tqdm(range(bcnt), desc="Batches"):
-        result = (
-            pipe(
-                image=input_images,
-                prompt=prompt,
-                negative_prompt=negative,
-                true_cfg_scale=cfg,
-                strength=strength,
-                num_inference_steps=steps,
-                width=width,
-                height=height,
-                num_images_per_prompt=bsz,
-                generator=gens[i * bsz : (i + 1) * bsz],
-            ).images
-            if not is_edit_model
-            else pipe(
-                image=input_images,
-                prompt=prompt,
-                negative_prompt=negative,
-                true_cfg_scale=cfg,
-                num_inference_steps=steps,
-                width=width,
-                height=height,
-                num_images_per_prompt=bsz,
-                generator=gens[i * bsz : (i + 1) * bsz],
-                consistency_strength=consistency_strength,
-            ).images
+        params = _build_params(
+            arch_mode,
+            "i2i",
+            prompt,
+            negative,
+            cfg,
+            steps,
+            width,
+            height,
+            bsz,
+            gens[i * bsz : (i + 1) * bsz],
+            image=input_images,
+            strength=strength,
+            consistency_strength=consistency_strength,
+            is_edit_model=is_edit_model,
         )
+        result = pipe(**params).images
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         for j, img in enumerate(result):
             s = base_seed + i * bsz + j
@@ -420,6 +836,7 @@ def generate_i2i(
                 model=vit,
                 prompt=prompt,
                 negative=negative,
+                meta_prompt=meta_prompt,
                 sampler=sampler,
                 steps=steps,
                 cfg=cfg,
@@ -452,6 +869,7 @@ def generate_i2i(
 
 def generate_inpaint(
     arch_mode,
+    base_model,
     vlm,
     vit,
     editor_val,
@@ -463,6 +881,7 @@ def generate_inpaint(
     ref_image3,
     prompt,
     negative,
+    meta_prompt,
     cfg,
     strength,
     steps,
@@ -475,21 +894,37 @@ def generate_inpaint(
     consistency_strength,
 ):
     start_time = perf_counter()
-    is_edit_model = vit_model_table[vit]["edit"]
-    if consistency_strength != 0.0 and not is_edit_model:
-        gr.Info("Consistency strength is only supported for Edit models. Ignoring it.")
+    adapter = pm.get_mode_adapter(arch_mode)
+    is_edit_model = _is_edit_model_for_mode(arch_mode, vit, base_model)
     input_image = editor_val["background"].convert("RGB")
     mask_image = _extract_mask(editor_val)
-    if is_edit_model:  # Normal inpaint models resize in their pipe
-        input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
-        mask_image = mask_image.resize((width, height), Image.Resampling.LANCZOS)
+    prepared = adapter.prepare_inpaint_inputs(
+        input_image=input_image,
+        mask_image=mask_image,
+        width=width,
+        height=height,
+        strength=strength,
+        consistency_strength=consistency_strength,
+        is_edit_model=is_edit_model,
+        notify=gr.Info,
+    )
+    input_image = prepared["input_image"]
+    mask_image = prepared["mask_image"]
+    strength = prepared["strength"]
+    consistency_strength = prepared["consistency_strength"]
+    control_image = prepared.get("control_image", input_image)
     base_seed = random.randint(0, 2**32 - 1) if seed == -1 else int(seed)
     negative = negative if negative.strip() != "" else None
     pipe = pm.get_pipeline(
-        arch_mode, vit, sampler, pipe_mode="inpaint", vlm_model_key=vlm
+        arch_mode,
+        vit,
+        sampler,
+        pipe_mode="inpaint",
+        vlm_model_key=vlm,
+        base_model_key=base_model,
     )
     gens = [
-        torch.Generator(device=pipe.transformer.device).manual_seed(base_seed + i)
+        torch.Generator(device=_generator_device_for(pipe)).manual_seed(base_seed + i)
         for i in range(bsz * bcnt)
     ]
     out_dir = (
@@ -514,37 +949,27 @@ def generate_inpaint(
         )
     input_images = [input_image] + refs if is_edit_model else input_image
     images, meta_list = [], []
+    _apply_requested_loras(pipe, arch_mode, meta_prompt)
     for i in tqdm(range(bcnt), desc="Batches"):
-        result = (
-            pipe(
-                image=input_images,
-                mask_image=mask_image,
-                prompt=prompt,
-                negative_prompt=negative,
-                true_cfg_scale=cfg,
-                strength=strength,
-                num_inference_steps=steps,
-                width=width,
-                height=height,
-                num_images_per_prompt=bsz,
-                generator=gens[i * bsz : (i + 1) * bsz],
-            ).images
-            if not is_edit_model
-            else pipe(
-                image=input_images,
-                mask_image=mask_image,
-                prompt=prompt,
-                negative_prompt=negative,
-                true_cfg_scale=cfg,
-                strength=strength,
-                num_inference_steps=steps,
-                width=width,
-                height=height,
-                num_images_per_prompt=bsz,
-                generator=gens[i * bsz : (i + 1) * bsz],
-                consistency_strength=consistency_strength,
-            ).images
+        params = _build_params(
+            arch_mode,
+            "inpaint",
+            prompt,
+            negative,
+            cfg,
+            steps,
+            width,
+            height,
+            bsz,
+            gens[i * bsz : (i + 1) * bsz],
+            image=input_images,
+            mask_image=mask_image,
+            control_image=control_image,
+            strength=strength,
+            consistency_strength=consistency_strength,
+            is_edit_model=is_edit_model,
         )
+        result = pipe(**params).images
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         for j, img in enumerate(result):
             s = base_seed + i * bsz + j
@@ -553,6 +978,7 @@ def generate_inpaint(
                 model=vit,
                 prompt=prompt,
                 negative=negative,
+                meta_prompt=meta_prompt,
                 sampler=sampler,
                 steps=steps,
                 cfg=cfg,
@@ -614,30 +1040,64 @@ with gr.Blocks(
         mode_dd = gr.Dropdown(
             mode_list,
             value=default_mode,
+            allow_custom_value=True,
             label="Mode",
+            scale=1,
+        )
+        base_pipe_dd = gr.Dropdown(
+            base_pipeline_list,
+            value=default_base_pipeline,
+            allow_custom_value=True,
+            label="Base Pipeline",
             scale=1,
         )
         vit_dd = gr.Dropdown(
             vit_model_list,
             value=default_vit,
+            allow_custom_value=True,
             label="ViT Model",
-            scale=5,
+            scale=4,
         )
         vlm_dd = gr.Dropdown(
-            default_vlm_list,
+            vlm_model_list,
             value=default_vlm,
+            allow_custom_value=True,
             label="VLM Model",
             scale=1,
         )
         sampler = gr.Dropdown(
-            list(SAMPLERS.keys()), value="FlowMatchEuler", label="Sampler"
+            sampler_list, value=default_sampler, label="Sampler"
         )
 
     with gr.Tab("t2i") as t2i_tab:
         with gr.Row():
             with gr.Column(scale=7):
-                prompt_t2i = gr.Textbox(lines=4, label="Positive prompt")
-                negative_t2i = gr.Textbox(lines=1, label="Negative prompt")
+                with gr.Group():
+                    prompt_t2i = gr.Textbox(lines=4, label="Positive prompt")
+                    with gr.Accordion("Negative prompt", open=False):
+                        negative_t2i = gr.Textbox(
+                            lines=2, label="Negative prompt", show_label=False
+                        )
+                    with gr.Accordion("Meta prompt", open=False, visible=default_enable_lora) as meta_acc_t2i:
+                        meta_prompt_t2i = gr.Textbox(
+                            lines=2, label="Meta prompt", show_label=False
+                        )
+                        with gr.Row():
+                            lora_name_t2i = gr.Dropdown(
+                                choices=default_lora_list,
+                                value=default_lora_list[0] if default_lora_list else None,
+                                allow_custom_value=True,
+                                label="LoRA Name",
+                            )
+                            lora_strength_t2i = gr.Number(value=1.0, label="LoRA Strength")
+                            with gr.Group():
+                                add_lora_btn_t2i = gr.Button("Add LoRA")
+                                reload_lora_btn_t2i = gr.Button("Reload List")
+                        add_lora_btn_t2i.click(
+                            _add_lora_to_meta,
+                            inputs=[meta_prompt_t2i, lora_name_t2i, lora_strength_t2i],
+                            outputs=meta_prompt_t2i,
+                        )
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_btn_t2i = gr.Button("Generate", variant="primary")
@@ -765,10 +1225,12 @@ with gr.Blocks(
             generate_t2i,
             inputs=[
                 mode_dd,
+                base_pipe_dd,
                 vlm_dd,
                 vit_dd,
                 prompt_t2i,
                 negative_t2i,
+                meta_prompt_t2i,
                 cfg_t2i,
                 steps_t2i,
                 width_t2i,
@@ -803,8 +1265,32 @@ with gr.Blocks(
     with gr.Tab("i2i") as i2i_tab:
         with gr.Row():
             with gr.Column(scale=7):
-                prompt_i2i = gr.Textbox(lines=4, label="Positive prompt")
-                negative_i2i = gr.Textbox(lines=1, label="Negative prompt")
+                with gr.Group():
+                    prompt_i2i = gr.Textbox(lines=4, label="Positive prompt")
+                    with gr.Accordion("Negative prompt", open=False):
+                        negative_i2i = gr.Textbox(
+                            lines=2, label="Negative prompt", show_label=False
+                        )
+                    with gr.Accordion("Meta prompt", open=False, visible=default_enable_lora) as meta_acc_i2i:
+                        meta_prompt_i2i = gr.Textbox(
+                            lines=2, label="Meta prompt", show_label=False
+                        )
+                        with gr.Row():
+                            lora_name_i2i = gr.Dropdown(
+                                choices=default_lora_list,
+                                value=default_lora_list[0] if default_lora_list else None,
+                                allow_custom_value=True,
+                                label="LoRA Name",
+                            )
+                            lora_strength_i2i = gr.Number(value=1.0, label="LoRA Strength")
+                            with gr.Group():
+                                add_lora_btn_i2i = gr.Button("Add LoRA")
+                                reload_lora_btn_i2i = gr.Button("Reload List")
+                        add_lora_btn_i2i.click(
+                            _add_lora_to_meta,
+                            inputs=[meta_prompt_i2i, lora_name_i2i, lora_strength_i2i],
+                            outputs=meta_prompt_i2i,
+                        )
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_i2i_btn = gr.Button("Generate", variant="primary")
@@ -977,6 +1463,7 @@ with gr.Blocks(
             generate_i2i,
             inputs=[
                 mode_dd,
+                base_pipe_dd,
                 vlm_dd,
                 vit_dd,
                 init_img_i2i,
@@ -988,6 +1475,7 @@ with gr.Blocks(
                 ref_img3_i2i,
                 prompt_i2i,
                 negative_i2i,
+                meta_prompt_i2i,
                 cfg_i2i,
                 resize_before_i2i,
                 denoising_strength_i2i,
@@ -1027,8 +1515,32 @@ with gr.Blocks(
     with gr.Tab("inpaint") as inp_tab:
         with gr.Row():
             with gr.Column(scale=7):
-                prompt_inp = gr.Textbox(lines=4, label="Positive prompt")
-                negative_inp = gr.Textbox(lines=1, label="Negative prompt")
+                with gr.Group():
+                    prompt_inp = gr.Textbox(lines=4, label="Positive prompt")
+                    with gr.Accordion("Negative prompt", open=False):
+                        negative_inp = gr.Textbox(
+                            lines=2, label="Negative prompt", show_label=False
+                        )
+                    with gr.Accordion("Meta prompt", open=False, visible=default_enable_lora) as meta_acc_inp:
+                        meta_prompt_inp = gr.Textbox(
+                            lines=2, label="Meta prompt", show_label=False
+                        )
+                        with gr.Row():
+                            lora_name_inp = gr.Dropdown(
+                                choices=default_lora_list,
+                                value=default_lora_list[0] if default_lora_list else None,
+                                allow_custom_value=True,
+                                label="LoRA Name",
+                            )
+                            lora_strength_inp = gr.Number(value=1.0, label="LoRA Strength")
+                            with gr.Group():
+                                add_lora_btn_inp = gr.Button("Add LoRA")
+                                reload_lora_btn_inp = gr.Button("Reload List")
+                        add_lora_btn_inp.click(
+                            _add_lora_to_meta,
+                            inputs=[meta_prompt_inp, lora_name_inp, lora_strength_inp],
+                            outputs=meta_prompt_inp,
+                        )
             with gr.Column(scale=1):
                 with gr.Tab("Generate"):
                     gen_inp_btn = gr.Button("Generate", variant="primary")
@@ -1203,6 +1715,7 @@ with gr.Blocks(
             generate_inpaint,
             inputs=[
                 mode_dd,
+                base_pipe_dd,
                 vlm_dd,
                 vit_dd,
                 img_mask_inp,
@@ -1214,6 +1727,7 @@ with gr.Blocks(
                 ref_img3_inp,
                 prompt_inp,
                 negative_inp,
+                meta_prompt_inp,
                 cfg_inp,
                 denoising_strength_inp,
                 steps_inp,
@@ -1325,7 +1839,7 @@ with gr.Blocks(
                 )
                 cap_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[mode_dd, img_cap, prompt_cap, vlm_dd, max_tkn_cap],
+                    inputs=[mode_dd, img_cap, prompt_cap, base_pipe_dd, vlm_dd, max_tkn_cap],
                     outputs=[cap_out, progress_cap],
                     api_name="vlm_caption",
                     show_progress_on=progress_cap,
@@ -1374,7 +1888,7 @@ with gr.Blocks(
                 )
                 ask_btn.click(
                     partial(vl_generate, pm),
-                    inputs=[mode_dd, img_vqa, q_box, vlm_dd, max_tkn_vqa],
+                    inputs=[mode_dd, img_vqa, q_box, base_pipe_dd, vlm_dd, max_tkn_vqa],
                     outputs=[ans_out, progress_vqa],
                     api_name="vlm_VQA",
                     show_progress_on=progress_vqa,
@@ -1411,15 +1925,27 @@ with gr.Blocks(
 
     png_in.change(extract_meta, png_in, [meta_text, meta_json])
 
+    tab_list = [t2i_tab, i2i_tab, inp_tab, vlm_tab, png_tab]
+    upper_dds = [base_pipe_dd, vlm_dd, vit_dd, sampler]
+    meta_components = [
+        meta_acc_t2i,
+        meta_acc_i2i,
+        meta_acc_inp,
+        lora_name_t2i,
+        lora_name_i2i,
+        lora_name_inp,
+    ]
     mode_dd.select(
-        partial(
-            _apply_mode,
-            vlm_model_list=vlm_model_list,
-            vit_model_list=vit_model_list,
-        ),
-        mode_dd,
-        [t2i_tab, i2i_tab, inp_tab, vlm_tab, png_tab, vlm_dd, vit_dd, sampler],
+        _apply_mode,
+        [mode_dd, base_pipe_dd, vlm_dd, vit_dd, sampler, lora_name_t2i, lora_name_i2i, lora_name_inp],
+        tab_list + upper_dds + meta_components,
     )
+
+    reload_lora_inputs = [mode_dd, lora_name_t2i, lora_name_i2i, lora_name_inp]
+    reload_lora_outputs = [lora_name_t2i, lora_name_i2i, lora_name_inp]
+    reload_lora_btn_t2i.click(_reload_lora_list, inputs=reload_lora_inputs, outputs=reload_lora_outputs)
+    reload_lora_btn_i2i.click(_reload_lora_list, inputs=reload_lora_inputs, outputs=reload_lora_outputs)
+    reload_lora_btn_inp.click(_reload_lora_list, inputs=reload_lora_inputs, outputs=reload_lora_outputs)
 
     # send buttons
 
@@ -1429,6 +1955,7 @@ with gr.Blocks(
         outputs=[
             prompt_t2i,
             negative_t2i,
+            meta_prompt_t2i,
             cfg_t2i,
             steps_t2i,
             width_t2i,
@@ -1448,6 +1975,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1469,6 +1997,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1490,6 +2019,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1510,6 +2040,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1530,6 +2061,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1550,6 +2082,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1570,6 +2103,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1590,6 +2124,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1610,6 +2145,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1630,6 +2166,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1650,6 +2187,7 @@ with gr.Blocks(
             ref_img3_i2i,
             prompt_i2i,
             negative_i2i,
+            meta_prompt_i2i,
             cfg_i2i,
             denoising_strength_i2i,
             consistency_strength_i2i,
@@ -1670,6 +2208,7 @@ with gr.Blocks(
             ref_img3_inp,
             prompt_inp,
             negative_inp,
+            meta_prompt_inp,
             cfg_inp,
             denoising_strength_inp,
             consistency_strength_inp,
@@ -1697,4 +2236,5 @@ with gr.Blocks(
 demo.launch(
     server_name=server_name,
     server_port=port,
+    # share=True
 )

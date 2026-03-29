@@ -1,0 +1,14 @@
+Z-Image:
+  LoRA:
+    Yagen: # huggingface lora
+      pretrained_model_name_or_path_or_dict: "yagen-nankotu/myloraEX"
+      weight_name: "Z-image_myloraEX.safetensors"
+    # local_example: # local lora
+      # pretrained_model_name_or_path_or_dict: "loras/local_example_z-image.safetensors"
+Qwen-Image:
+  LoRA:
+    lightning_8steps_v2.0: # huggingface lora
+      pretrained_model_name_or_path_or_dict: "lightx2v/Qwen-Image-Lightning"
+      weight_name: " Qwen-Image-Lightning-8steps-V2.0-bf16.safetensors"
+    # local_example: # local lora
+      # pretrained_model_name_or_path_or_dict: "loras/local_example_qwen-image.safetensors"

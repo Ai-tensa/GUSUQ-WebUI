@@ -1,0 +1,25 @@
+Qwen Image:
+  module: qwen_image
+  image_generation: true
+  allowed_base_arch: Qwen-Image
+  allow_same_as_image_generation_pipeline: true
+  keep_tabs: [t2i_tab, i2i_tab, inpaint_tab, vlm_tab, png_info_tab]
+  allowed_vit_arch: Qwen-Image
+  allowed_vlm_arch: Qwen2.5-VL
+  allowed_vlm_variants: [7B]
+  enable_adapters: [LoRA]
+VLM Only:
+  module: vlm_only
+  image_generation: false
+  keep_tabs: [vlm_tab, png_info_tab]
+  allowed_vit_arch: null
+Z-Image:
+  module: z_image
+  image_generation: true
+  allowed_base_arch: Z-Image
+  allow_same_as_image_generation_pipeline: true
+  keep_tabs: [t2i_tab, i2i_tab, vlm_tab, png_info_tab]
+  allowed_vit_arch: Z-Image
+  allowed_vlm_arch: Qwen3-VL
+  allowed_vlm_variants: [4B]
+  enable_adapters: [LoRA]

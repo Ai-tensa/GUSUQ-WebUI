@@ -1,0 +1,29 @@
+- name: "Qwen/Qwen-Image"
+  arch: "Qwen-Image"
+  edit: false
+  image_repo: "Qwen/Qwen-Image"
+  edit_repo: "Qwen/Qwen-Image-Edit-2509"
+
+- name: "Qwen/Qwen-Image-Edit"
+  arch: "Qwen-Image"
+  edit: true
+  image_repo: "Qwen/Qwen-Image-Edit"
+  edit_repo: "Qwen/Qwen-Image-Edit"
+
+- name: "Qwen/Qwen-Image-Edit-2509"
+  arch: "Qwen-Image"
+  edit: true
+  image_repo: "Qwen/Qwen-Image-Edit-2509"
+  edit_repo: "Qwen/Qwen-Image-Edit-2509"
+
+# Not tested yet.
+# - name: "Qwen/Qwen-Image-2512"
+#   arch: "Qwen-Image"
+#   edit: false
+#   image_repo: "Qwen/Qwen-Image-2512"
+#   edit_repo: "Qwen/Qwen-Image-Edit-2509"
+
+- name: "Tongyi-MAI/Z-Image-Turbo"
+  arch: "Z-Image"
+  edit: false
+  pipeline_id: "Tongyi-MAI/Z-Image-Turbo"

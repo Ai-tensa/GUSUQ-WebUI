@@ -27,3 +27,6 @@ FLOWMATCH_CFG = {
 
 BASE_QWEN_IMAGE_ID = "Qwen/Qwen-Image"
 BASE_QWEN_IMAGE_EDIT_ID = "Qwen/Qwen-Image-Edit-2509"
+BASE_ZIMAGE_ID = "Tongyi-MAI/Z-Image-Turbo"
+BASE_QWEN3_VL_ID = "Qwen/Qwen3-VL-4B-Thinking"
+SAME_AS_IMAGE_GENERATION_PIPELINE = "Same as Image Generation Pipeline"

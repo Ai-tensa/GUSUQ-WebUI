@@ -5,27 +5,21 @@ from transformers import (
     AutoTokenizer,
     Qwen2_5_VLForConditionalGeneration,
     Qwen2_5_VLProcessor,
+    Qwen3VLForConditionalGeneration,
+    Qwen3VLProcessor,
+    Qwen3Model,
 )
 from diffusers import (
     FlowMatchEulerDiscreteScheduler,
     DiffusionPipeline,
 )
-from nunchaku.models.transformers.transformer_qwenimage import (
-    NunchakuQwenImageTransformer2DModel,
-)
-from qwen_image_pipelines import (
-    QwenImagePipeline,
-    QwenImageImg2ImgPipeline,
-    QwenImageInpaintPipeline,
-    QwenImageEditPlusPipeline,
-    QwenImageEditPlusInpaintPipeline,
-)
 from constants import (
     SAMPLERS,
     FLOWMATCH_CFG,
-    BASE_QWEN_IMAGE_ID,
-    BASE_QWEN_IMAGE_EDIT_ID,
+    BASE_QWEN3_VL_ID,
+    SAME_AS_IMAGE_GENERATION_PIPELINE,
 )
+from modes import ModeAdapter, load_mode_adapters
 from utils import release_memory_resources
 
 
@@ -76,6 +70,8 @@ def patch_encode_prompt(pipe, opt_policy):
             return embeds, mask
         else:
             embeds, mask = original_encode(self, *args, **kwargs)
+            if not isinstance(embeds, torch.Tensor):
+                return embeds, mask
             embeds = embeds.to(dtype=tgt_dtype)
             return embeds, mask
 
@@ -88,12 +84,14 @@ class PipelineManager:
         opt_pol_cfg: dict,
         vlm_model_table: dict,
         vit_model_table: dict,
+        base_pipeline_table: dict,
         mode_config: dict,
     ):
         self.pipes: dict[str, DiffusionPipeline] = {}
         self.current_arch_mode = None
         self.current_vlm = None
         self.current_vit = None
+        self.current_base_model = None
         self.text_encoder = None
         self.tokenizer = None
         self.vision_processor = None
@@ -102,8 +100,16 @@ class PipelineManager:
         self.opt_pol_cfg = opt_pol_cfg
         self.vlm_model_table = vlm_model_table
         self.vit_model_table = vit_model_table
+        self.base_pipeline_table = base_pipeline_table
         self.mode_config = mode_config
+        self.mode_adapters: dict[str, ModeAdapter] = load_mode_adapters(mode_config)
         self.is_set_te_offload = False
+
+    def get_mode_adapter(self, arch_mode: str) -> ModeAdapter:
+        adapter = self.mode_adapters.get(arch_mode)
+        if adapter is None:
+            raise RuntimeError(f"Unsupported arch_mode: {arch_mode}")
+        return adapter
 
     def get_pipeline(
         self,
@@ -112,156 +118,73 @@ class PipelineManager:
         sampler_name: str,
         pipe_mode: str = "t2i",
         vlm_model_key: str = None,
+        base_model_key: str = None,
     ):
         self._switch_arch_mode(arch_mode)
-        is_edit_model = self.vit_model_table[vit_model_key]["edit"]
-        # First load
-        if self.pipes == {}:
-            del_vlm = vlm_model_key != self.current_vlm
-            del_vit = vit_model_key != self.current_vit
-            if del_vlm or del_vit:
-                self.clear_pipelines(del_vlm=del_vlm, del_vit=del_vit)
-                release_memory_resources()
-            self._load_vlm(vlm_model_key)
-            self._load_transformer(vit_model_key)
-            scheduler = SAMPLERS[sampler_name].from_config(FLOWMATCH_CFG)
-            if self.vae is None:
-                self.pipes["t2i"] = QwenImagePipeline.from_pretrained(
-                    BASE_QWEN_IMAGE_ID,
-                    text_encoder=self.text_encoder,
-                    tokenizer=self.tokenizer,
-                    transformer=self.transformer,
-                    scheduler=scheduler,
-                    torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,
-                )
-                self.vae = self.pipes["t2i"].vae
-            else:
-                self.pipes["t2i"] = QwenImagePipeline.from_pretrained(
-                    BASE_QWEN_IMAGE_ID,
-                    text_encoder=self.text_encoder,
-                    tokenizer=self.tokenizer,
-                    transformer=self.transformer,
-                    scheduler=scheduler,
-                    vae=self.vae,
-                    torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,
-                )
-            self.pipes["i2i"] = QwenImageImg2ImgPipeline.from_pretrained(
-                BASE_QWEN_IMAGE_ID, **self.pipes["t2i"].components
-            )
-            self.pipes["i2i_edit"] = QwenImageEditPlusPipeline.from_pretrained(
-                BASE_QWEN_IMAGE_EDIT_ID,
-                vision_processor=self.vision_processor,
-                **self.pipes["t2i"].components,
-            )
-            self.pipes["inpaint"] = QwenImageInpaintPipeline.from_pretrained(
-                BASE_QWEN_IMAGE_ID, **self.pipes["t2i"].components
-            )
-            self.pipes["inpaint_edit"] = (
-                QwenImageEditPlusInpaintPipeline.from_pretrained(
-                    BASE_QWEN_IMAGE_EDIT_ID, **self.pipes["i2i_edit"].components
-                )
-            )
+        adapter = self.get_mode_adapter(arch_mode)
+        return adapter.get_pipeline(
+            self,
+            vit_model_key,
+            sampler_name,
+            pipe_mode,
+            vlm_model_key=vlm_model_key,
+            base_model_key=base_model_key,
+            patch_encode_prompt_fn=patch_encode_prompt,
+            override_device_property_fn=_override_device_property,
+        )
 
-            opt_policy = self.opt_pol_cfg.get("opt_policy", None)
-            for _pipe in self.pipes.values():
-                patch_encode_prompt(_pipe, opt_policy)
-            if self.opt_pol_cfg.get("enable_vae_slicing", True):
-                self.vae.enable_slicing()
-            if self.opt_pol_cfg.get("enable_vae_tiling", False):
-                self.vae.enable_tiling(
-                    tile_sample_min_height=self.opt_pol_cfg.get(
-                        "vae_tile_sample_min_height", None
-                    ),
-                    tile_sample_min_width=self.opt_pol_cfg.get(
-                        "vae_tile_sample_min_width", None
-                    ),
-                    tile_sample_stride_height=self.opt_pol_cfg.get(
-                        "vae_tile_sample_stride_height", None
-                    ),
-                    tile_sample_stride_width=self.opt_pol_cfg.get(
-                        "vae_tile_sample_stride_width", None
-                    ),
-                )
-
-            if opt_policy == "no_offload":
-                self.pipes["i2i_edit"].to("cuda")
-                print("No offloading applied.")
-            elif opt_policy == "high_vram":
-                self.transformer.to("cuda")
-                self.vae.to("cuda")
-                for _pipe in self.pipes.values():
-                    _override_device_property(_pipe)
-                print("Enabled high vram setting for offloading.")
-            elif opt_policy == "mid_vram":
-                self.pipes["t2i"].enable_model_cpu_offload()
-                print("Enabled medium vram setting for offloading.")
-            elif opt_policy == "low_vram":
-                self.transformer.set_offload(
-                    True, use_pin_memory=False, num_blocks_on_gpu=1
-                )
-                self.pipes["t2i"]._exclude_from_cpu_offload.append("transformer")
-                self.pipes["t2i"].enable_sequential_cpu_offload()
-                print("Enabled low vram setting for offloading.")
-            else:
-                print(f"Unknown opt_policy: {opt_policy}")
-                print("Available options: high_vram | mid_vram | low_vram")
-            self.is_set_te_offload = True
-
-            release_memory_resources()
-            if pipe_mode == "t2i":
-                return self.pipes["t2i"]
-            elif pipe_mode == "i2i":
-                return self.pipes["i2i_edit"] if is_edit_model else self.pipes["i2i"]
-            else:
-                return (
-                    self.pipes["inpaint_edit"]
-                    if is_edit_model
-                    else self.pipes["inpaint"]
-                )
-
-        # Model switch
-        if vlm_model_key != self.current_vlm or vit_model_key != self.current_vit:
-            del_vlm = vlm_model_key != self.current_vlm
-            del_vit = vit_model_key != self.current_vit
-            self.clear_pipelines(del_vlm=del_vlm, del_vit=del_vit)
-
-            return self.get_pipeline(
-                vit_model_key, sampler_name, pipe_mode, vlm_model_key=vlm_model_key
-            )
-
-        # Sampler switch
-        if self.pipes["t2i"].scheduler.__class__ is not SAMPLERS.get(
-            sampler_name, FlowMatchEulerDiscreteScheduler
-        ):
-            self.pipes["t2i"].scheduler = SAMPLERS[sampler_name].from_config(
-                FLOWMATCH_CFG
-            )
-            self.pipes["i2i"].scheduler = self.pipes["t2i"].scheduler
-            self.pipes["i2i_edit"].scheduler = self.pipes["t2i"].scheduler
-            self.pipes["inpaint"].scheduler = self.pipes["t2i"].scheduler
-            self.pipes["inpaint_edit"].scheduler = self.pipes["t2i"].scheduler
-        if pipe_mode == "t2i":
-            return self.pipes["t2i"]
-        elif pipe_mode == "i2i":
-            return self.pipes["i2i_edit"] if is_edit_model else self.pipes["i2i"]
-        else:
-            return (
-                self.pipes["inpaint_edit"] if is_edit_model else self.pipes["inpaint"]
-            )
-
-    def get_vlm(self, arch_mode: str, model_key: str = None):
+    def get_vlm(self, arch_mode: str, model_key: str = None, base_model_key: str = None):
         self._switch_arch_mode(arch_mode)
-        if self.text_encoder is not None and (model_key != self.current_vlm):
+        if model_key == SAME_AS_IMAGE_GENERATION_PIPELINE:
+            if self.text_encoder is not None and model_key != self.current_vlm:
+                self.clear_pipelines(del_vlm=True)
+
+            if self.text_encoder is None:
+                cfg = self.mode_config.get(arch_mode, {})
+                base_choices = cfg.get("base_pipelines") or [None]
+                resolved_base_model = (
+                    base_model_key
+                    if base_model_key not in (None, "Default", "None")
+                    else base_choices[0]
+                )
+                self.get_pipeline(
+                    arch_mode,
+                    SAME_AS_IMAGE_GENERATION_PIPELINE,
+                    list(SAMPLERS.keys())[0],
+                    pipe_mode="t2i",
+                    vlm_model_key=model_key,
+                    base_model_key=resolved_base_model,
+                )
+
+            self.current_vlm = model_key
+        elif self.text_encoder is not None and (model_key != self.current_vlm):
             self.clear_pipelines(del_vlm=True)
 
-        self._load_vlm(model_key)
+        if self.text_encoder is None:
+            self._load_vlm(model_key)
         release_memory_resources()
-        return self.text_encoder, self.tokenizer, self.vision_processor
+        if isinstance(self.text_encoder, Qwen3Model):
+            text_encoder = Qwen3VLForConditionalGeneration.from_pretrained(
+                BASE_QWEN3_VL_ID,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+            )
+            text_encoder.model.text_model = self.text_encoder
+            self.vision_processor = Qwen3VLProcessor.from_pretrained(
+                BASE_QWEN3_VL_ID,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True,
+            )
+            release_memory_resources()
+            text_encoder.to("cuda")
+            return text_encoder, self.tokenizer, self.vision_processor
+        else:
+            return self.text_encoder, self.tokenizer, self.vision_processor
 
-    def clear_pipelines(self, del_vlm: bool = False, del_vit: bool = False):
+    def clear_pipelines(self, del_vlm: bool = False, del_vit: bool = False, del_vae: bool = False):
         self.pipes.clear()
+        self.current_base_model = None
         if del_vlm:
             del self.text_encoder
             self.text_encoder = None
@@ -275,6 +198,9 @@ class PipelineManager:
             del self.transformer
             self.transformer = None
             self.current_vit = None
+        if del_vae:
+            del self.vae
+            self.vae = None
         release_memory_resources()
 
     def _load_vlm(self, model_key: str = None):
@@ -314,34 +240,15 @@ class PipelineManager:
 
         release_memory_resources()
 
-    def _load_transformer(self, model_key: str):
-        if self.transformer is not None:
-            if model_key != self.current_vit:
-                print(
-                    "Please unload previous transformer model first before loading a new one."
-                )
-                raise RuntimeError("Previous transformer model not unloaded.")
-            return
-        if model_key is None:
-            model_key = list(self.vit_model_table.keys())[0]
-        self.current_vit = model_key
-        self.transformer = NunchakuQwenImageTransformer2DModel.from_pretrained(
-            self.vit_model_table[model_key]["path"],
-            low_cpu_mem_usage=True,
-        )
-        release_memory_resources()
-
     def _switch_arch_mode(self, arch_mode: str):
         if arch_mode == self.current_arch_mode:
             return
-
-        if arch_mode == "VLM Only":
-            print("Switched to VLM Only mode, clearing pipelines.")
-            self.clear_pipelines(del_vit=True)
+        cfg = self.mode_config.get(arch_mode, {})
+        if not cfg.get("image_generation", True):
+            print("Switched to non-image-generation mode, clearing pipelines.")
+            self.clear_pipelines(del_vit=True, del_vae=True)
             self.current_arch_mode = arch_mode
             return
-
-        cfg = self.mode_config.get(arch_mode, {})
 
         if self.text_encoder is not None:
             class_name = cfg.get(
@@ -354,7 +261,7 @@ class PipelineManager:
                 print(
                     f"Cleared VLM model due to vlm model class {class_name} mismatch (current: {type(self.text_encoder)})."
                 )
-                self.clear_pipelines(del_vlm=True)
+                self.clear_pipelines(del_vlm=True, del_vae=True)
 
         self.current_arch_mode = arch_mode
 

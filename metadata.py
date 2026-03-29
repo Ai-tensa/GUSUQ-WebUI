@@ -22,7 +22,7 @@ def apply_config_to_t2i(path, meta_str):
     if isinstance(meta_str, gr.Json):
         meta_str = meta_str.value
     if not path or not meta_str or not os.path.exists(path):
-        return [gr.update()] * 8
+        return [gr.update()] * 9
     if isinstance(meta_str, dict):
         meta = meta_str
     else:
@@ -30,6 +30,7 @@ def apply_config_to_t2i(path, meta_str):
     return [
         gr.update(value=meta.get("prompt", "")),
         gr.update(value=meta.get("negative", "")),
+        gr.update(value=meta.get("meta_prompt", "")),
         gr.update(value=float(meta.get("cfg", 1.0))),
         gr.update(value=int(meta.get("steps", 4))),
         gr.update(value=int(meta.get("width", 1328))),
@@ -48,7 +49,7 @@ def apply_config_to_i2i(path, meta_str, dest="input"):
     if isinstance(meta_str, gr.Json):
         meta_str = meta_str.value
     if not meta_str:
-        configs = [gr.update()] * 10
+        configs = [gr.update()] * 11
         return imgs + configs
     if isinstance(meta_str, dict):
         meta = meta_str
@@ -57,6 +58,7 @@ def apply_config_to_i2i(path, meta_str, dest="input"):
     configs = [
         gr.update(value=meta.get("prompt", "")),
         gr.update(value=meta.get("negative", "")),
+        gr.update(value=meta.get("meta_prompt", "")),
         gr.update(value=float(meta.get("cfg", 1.0))),
         gr.update(value=float(meta.get("strength", 1.0))),
         gr.update(value=float(meta.get("consistency_strength", 0.0))),
@@ -79,7 +81,7 @@ def apply_config_to_inpaint(path, meta_str, dest="input"):
     if isinstance(meta_str, gr.Json):
         meta_str = meta_str.value
     if not meta_str:
-        configs = [gr.update()] * 10
+        configs = [gr.update()] * 11
         return imgs + configs
     if isinstance(meta_str, dict):
         meta = meta_str
@@ -88,6 +90,7 @@ def apply_config_to_inpaint(path, meta_str, dest="input"):
     configs = [
         gr.update(value=meta.get("prompt", "")),
         gr.update(value=meta.get("negative", "")),
+        gr.update(value=meta.get("meta_prompt", "")),
         gr.update(value=float(meta.get("cfg", 1.0))),
         gr.update(value=float(meta.get("strength", 1.0))),
         gr.update(value=float(meta.get("consistency_strength", 0.0))),
